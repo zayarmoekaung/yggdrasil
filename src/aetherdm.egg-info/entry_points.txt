@@ -1,0 +1,2 @@
+[console_scripts]
+aetherdm = aetherdm.main:cli

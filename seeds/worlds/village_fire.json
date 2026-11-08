@@ -1,0 +1,163 @@
+{
+  "name": "village_fire",
+  "description": "A small village where a fire has broken out in the marketplace. NPCs are reacting to the crisis.",
+  "global_flags": {
+    "crisis_active": true,
+    "starting_round": 1
+  },
+  "locations": [
+    {
+      "id": "village_square",
+      "name": "Village Square",
+      "description": "The central gathering place of Oakhaven. A stone well sits in the middle, surrounded by benches and a notice board.",
+      "tags": ["urban", "central", "outdoor"],
+      "environment": {
+        "conditions": ["smoky"],
+        "objects": [
+          {"id": "stone_well", "name": "Stone Well", "description": "The village's main water source.", "quantity": 1},
+          {"id": "notice_board", "name": "Notice Board", "description": "A wooden board with village announcements.", "quantity": 1}
+        ],
+        "resources": {"water": 50},
+        "flags": {}
+      },
+      "connections": [
+        {"target_id": "marketplace", "type": "path", "travel_time": 1, "propagation_modifier": 1.0},
+        {"target_id": "elders_hall", "type": "road", "travel_time": 2, "propagation_modifier": 0.8}
+      ],
+      "characters": ["pc_1"],
+      "pending_effects": []
+    },
+    {
+      "id": "marketplace",
+      "name": "Marketplace",
+      "description": "A bustling market area now engulfed in flames. Stalls are burning and smoke fills the air.",
+      "tags": ["urban", "market", "outdoor", "dangerous"],
+      "environment": {
+        "conditions": ["on_fire", "smoky", "chaotic"],
+        "objects": [
+          {"id": "burning_stall_1", "name": "Burning Grain Stall", "description": "Garrick's grain stall, fully engulfed.", "quantity": 1},
+          {"id": "burning_stall_2", "name": "Burning Cloth Stall", "description": "Mira's cloth stall, flames spreading.", "quantity": 1}
+        ],
+        "resources": {},
+        "flags": {"fire_origin": true, "fire_intensity": 8}
+      },
+      "connections": [
+        {"target_id": "village_square", "type": "path", "travel_time": 1, "propagation_modifier": 1.0},
+        {"target_id": "riverside", "type": "path", "travel_time": 3, "propagation_modifier": 0.5}
+      ],
+      "characters": ["npc_garrick", "npc_mira"],
+      "pending_effects": []
+    },
+    {
+      "id": "elders_hall",
+      "name": "Elder's Hall",
+      "description": "A sturdy stone building where the village council meets. Currently sheltering some refugees.",
+      "tags": ["urban", "indoor", "safe", "official"],
+      "environment": {
+        "conditions": ["crowded"],
+        "objects": [
+          {"id": "council_table", "name": "Council Table", "description": "A large oak table where elders deliberate.", "quantity": 1},
+          {"id": "emergency_supplies", "name": "Emergency Supplies", "description": "Blankets, bandages, and dried food.", "quantity": 1}
+        ],
+        "resources": {"blankets": 10, "bandages": 20, "food_rations": 15},
+        "flags": {"shelter_active": true}
+      },
+      "connections": [
+        {"target_id": "village_square", "type": "road", "travel_time": 2, "propagation_modifier": 0.8}
+      ],
+      "characters": ["npc_elara"],
+      "pending_effects": []
+    },
+    {
+      "id": "riverside",
+      "name": "Riverside",
+      "description": "The riverbank below the village. A good source of water and a potential firebreak.",
+      "tags": ["outdoor", "water", "safe"],
+      "environment": {
+        "conditions": [],
+        "objects": [
+          {"id": "river", "name": "River", "description": "The Oakhaven River, flowing steadily.", "quantity": 1},
+          {"id": "buckets", "name": "Water Buckets", "description": "A stack of wooden buckets near the bank.", "quantity": 5}
+        ],
+        "resources": {"water": 999},
+        "flags": {}
+      },
+      "connections": [
+        {"target_id": "marketplace", "type": "path", "travel_time": 3, "propagation_modifier": 0.5}
+      ],
+      "characters": [],
+      "pending_effects": []
+    }
+  ],
+  "characters": [
+    {
+      "id": "pc_1",
+      "name": "Player Character",
+      "type": "pc",
+      "location_id": "village_square",
+      "stats": {"str": 10, "dex": 12, "con": 11, "int": 13, "wis": 14, "cha": 9},
+      "inventory": [
+        {"id": "sword", "name": "Iron Sword", "description": "A standard iron sword.", "quantity": 1},
+        {"id": "backpack", "name": "Backpack", "description": "A leather backpack with rations.", "quantity": 1}
+      ],
+      "personality": "Brave but cautious. Tends to assess situations before acting.",
+      "goals": ["Help the villagers", "Contain the fire", "Find out what caused it"],
+      "secrets": [],
+      "quickness": 6,
+      "memory": [],
+      "relationships": {"npc_garrick": 20, "npc_mira": 10, "npc_elara": 30},
+      "conditions": []
+    },
+    {
+      "id": "npc_garrick",
+      "name": "Garrick",
+      "type": "npc",
+      "location_id": "marketplace",
+      "stats": {"str": 14, "dex": 9, "con": 13, "int": 8, "wis": 10, "cha": 11},
+      "inventory": [
+        {"id": "grain_sack", "name": "Grain Sack", "description": "Half-burnt sack of wheat.", "quantity": 1}
+      ],
+      "personality": "Gruff merchant, cares more about his goods than people. Stubborn and loud.",
+      "goals": ["Save his remaining grain", "Blame someone for the fire"],
+      "secrets": ["He was storing lantern oil near the grain — the real cause"],
+      "quickness": 3,
+      "memory": [],
+      "relationships": {"npc_mira": -20, "npc_elara": -10},
+      "conditions": ["panicked"]
+    },
+    {
+      "id": "npc_mira",
+      "name": "Mira",
+      "type": "npc",
+      "location_id": "marketplace",
+      "stats": {"str": 8, "dex": 15, "con": 10, "int": 14, "wis": 12, "cha": 16},
+      "inventory": [
+        {"id": "cloth_bolt", "name": "Cloth Bolt", "description": "A bolt of silk, slightly singed.", "quantity": 1}
+      ],
+      "personality": "Quick-witted weaver. Tries to keep everyone calm. Natural leader.",
+      "goals": ["Get people to safety", "Save what goods she can", "Keep order"],
+      "secrets": ["She saw Garrick's lantern tip over but hasn't said anything"],
+      "quickness": 8,
+      "memory": [],
+      "relationships": {"npc_garrick": -30, "npc_elara": 40},
+      "conditions": ["alarmed"]
+    },
+    {
+      "id": "npc_elara",
+      "name": "Elara",
+      "type": "npc",
+      "location_id": "elders_hall",
+      "stats": {"str": 9, "dex": 10, "con": 11, "int": 16, "wis": 15, "cha": 14},
+      "inventory": [
+        {"id": "elder_staff", "name": "Elder's Staff", "description": "A wooden staff symbolizing authority.", "quantity": 1}
+      ],
+      "personality": "Wise village elder. Calm under pressure, focused on community welfare.",
+      "goals": ["Organize evacuation", "Protect the vulnerable", "Assess the damage"],
+      "secrets": ["She suspects arson but won't say it publicly yet"],
+      "quickness": 5,
+      "memory": [],
+      "relationships": {"npc_garrick": -10, "npc_mira": 40},
+      "conditions": []
+    }
+  ]
+}
