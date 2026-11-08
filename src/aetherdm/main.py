@@ -131,18 +131,19 @@ def next_round(location: str = typer.Option("all", "--location", "-l", help="Loc
         for loc_id in location_ids:
             pool = engine.create_pool(loc_id)
 
-            # Auto-add actions for NPCs at this location (Phase 1 demo)
+            # Auto-add actions for NPCs at this location (Phase 2 demo)
             loc = engine._locations.get(loc_id)
             if loc:
                 for ch_id in loc.characters:
                     ch = engine._characters.get(ch_id)
                     if ch and ch.type == "npc" and ch.goals:
-                        # NPCs declare actions based on their first goal
                         engine.add_action(pool, ch_id, ch.goals[0])
 
             # Lock and resolve
             engine.lock_pool(loc_id)
             effects = engine.resolve_pool(pool)
+
+            # Get narrative from DM Agent (stored in resolution)
             narrative = engine.get_narrative(pool, effects)
             console.print(narrative)
             console.print()

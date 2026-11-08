@@ -92,21 +92,25 @@ python -m aetherdm.main resolve marketplace
 
 ```
 src/aetherdm/
-├── models/              # Pydantic schemas (LocationNode, Character, Event, Effect, ActionPool)
+├── models/              # Pydantic schemas (LocationNode, Character, Event, Effect, ActionPool, DMResolution)
 ├── db/                  # SQLite schema, repository, NetworkX graph helpers
 ├── simulation/
-│   ├── engine.py        # Game loop + rule-based pool resolution
+│   ├── engine.py        # Game loop + DM Agent integration
 │   ├── reaction.py      # Reaction score calculation
 │   ├── eligibility.py   # Character eligibility filtering
 │   └── effect_applier.py  # Effect application to state
-├── agents/              # DM Agent (LangGraph nodes — Phase 2+)
+├── agents/
+│   ├── dm_agent.py      # LLM-powered DM Agent (JSON mode + fallback)
+│   ├── dm_graph.py      # LangGraph state graph for round lifecycle
+│   └── prompts/
+│       └── dm_v1.txt    # Versioned DM prompt
 ├── llm/                 # LiteLLM provider (Qwen + KoboldCPP)
 ├── config.py            # Environment configuration
 ├── seed_loader.py       # JSON seed loader
 └── main.py              # CLI entry point
 
 seeds/worlds/            # JSON world definitions
-tests/                   # Unit and integration tests (41 passing)
+tests/                   # Unit and integration tests (50 passing)
 ```
 
 ## Development Phases

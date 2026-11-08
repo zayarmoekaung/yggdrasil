@@ -77,18 +77,18 @@ class SimulationEngine:
         return pool
 
     def resolve_pool(self, pool: ActionPool) -> list[Effect]:
-        """Resolve an action pool using rule-based logic.
+        """Resolve an action pool using the LLM-powered DM Agent.
 
-        Phase 1: All actions are processed in reaction-score order.
-        Each eligible character's action succeeds. Contradiction detection
-        is intentionally NOT done here — that is the DM Agent's job in Phase 2,
-        where the LLM has full context to judge whether actions conflict.
+        Phase 2: DM Agent receives full context (location state, characters, actions)
+        and returns structured Effects + narrative via LLM. Falls back to rule-based
+        if LLM is unavailable.
 
         Steps:
         1. Get eligible characters at the location
-        2. Order by reaction score (higher = acts first)
-        3. Each action produces an Effect
+        2. Build context for DM Agent
+        3. DM Agent resolves actions with full contextual understanding
         4. Effects are applied and logged
+        5. Narrative is returned
         """
         # Get characters at this location
         location = self._locations.get(pool.location_id)
@@ -101,26 +101,21 @@ class SimulationEngine:
             if ch_id in self._characters
         ]
 
-        # Filter eligible and order by reaction
+        # Filter eligible
         eligible = filter_eligible(chars_at_location)
-        ordered = order_characters_by_reaction(eligible)
 
-        # Build action lookup (only for characters who declared actions)
-        action_map = {a.character_id: a for a in pool.actions}
+        # DM Agent resolves the pool
+        resolution = self.dm_agent.resolve_pool_sync(pool, location, eligible)
 
-        effects: list[Effect] = []
-        for ch in ordered:
-            action = action_map.get(ch.id)
-            if action is None:
-                continue
-            effect = self._create_effect_for_action(action)
-            effects.append(effect)
+        # Convert resolution to effects
+        effects = self.dm_agent.resolution_to_effects(resolution)
 
         # Apply effects
         for effect in effects:
             apply_effect(effect, self.repo, self._locations, self._characters)
 
         # Save events/effects for history
+        action_map = {a.character_id: a for a in pool.actions}
         for effect in effects:
             event = Event(
                 id=f"evt-{pool.location_id}-{pool.round}-{effect.target_id}",
@@ -128,7 +123,7 @@ class SimulationEngine:
                 origin_location_id=pool.location_id,
                 actor_id=effect.target_id,
                 type="action",
-                intent=action_map[effect.target_id].intent if effect.target_id in action_map else "",
+                intent=action_map.get(effect.target_id).intent if effect.target_id in action_map else "",
                 scope="local",
                 intensity=1.0,
                 effects=[effect],
@@ -141,21 +136,17 @@ class SimulationEngine:
 
         return effects
 
-    def _create_effect_for_action(self, action: ActionEntry) -> Effect:
-        """Create an Effect representing a successful action.
-
-        Phase 1: Simple placeholder effect that adds a condition to the character.
-        Phase 2+: Will parse intent and generate meaningful effects.
-        """
-        return Effect(
-            target_type="character",
-            target_id=action.character_id,
-            changes={"conditions": ["acted"]},
-            description=f"{action.character_id} successfully: {action.intent}",
-        )
-
     def get_narrative(self, pool: ActionPool, effects: list[Effect]) -> str:
-        """Generate a narrative description of what happened."""
+        """Generate a narrative description of what happened.
+
+        Phase 2: Uses the narrative from the DM Agent's resolution if available,
+        otherwise falls back to the simple effect listing.
+        """
+        # Try to get the last resolution's narrative
+        if hasattr(self, "_last_narrative") and self._last_narrative:
+            return f"[Round {pool.round}] {pool.location_id}:\n{self._last_narrative}"
+
+        # Fallback
         lines = [f"[Round {pool.round}] Actions resolved at {pool.location_id}:"]
         for effect in effects:
             lines.append(f"  - {effect.description}")
