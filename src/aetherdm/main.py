@@ -335,10 +335,11 @@ def play(
                     "  q/quit/exit          — Quit"
                 )
             elif action == "declare":
-                if len(parts) < 2:
+                # Everything after "declare " is the intent
+                intent = cmd[len("declare"):].strip()
+                if not intent:
                     console.print("[red]Usage: declare <intent>[/red]")
                     continue
-                intent = parts[1]
                 pool = engine.repo.load_action_pool(pc.location_id, engine.game_state.current_round)
                 if pool is None or pool.status == "resolved":
                     pool = engine.create_pool(pc.location_id)
