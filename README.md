@@ -86,6 +86,14 @@ python -m aetherdm.main declare marketplace pc_1 "Fight the fire with buckets"
 
 # Resolve a specific location's pool
 python -m aetherdm.main resolve marketplace
+
+# Start interactive play mode
+python -m aetherdm.main play
+
+# Session management
+python -m aetherdm.main save my_session
+python -m aetherdm.main load-session my_session
+python -m aetherdm.main list-sessions
 ```
 
 ## Project Structure
@@ -107,17 +115,18 @@ src/aetherdm/
 ├── llm/                 # LiteLLM provider (Qwen + KoboldCPP)
 ├── config.py            # Environment configuration
 ├── seed_loader.py       # JSON seed loader
-└── main.py              # CLI entry point
+├── session.py           # Session save/load manager
+└── main.py              # CLI entry point (includes interactive play mode)
 
 seeds/worlds/            # JSON world definitions
-tests/                   # Unit and integration tests (50 passing)
+tests/                   # Unit and integration tests (55 passing)
 ```
 
 ## Development Phases
 
 - **Phase 0** ✅ — Skeleton: models, DB schema, seed loader, LLM provider, CLI
 - **Phase 1** ✅ — Core Simulation: reaction scoring, eligibility, effect applier, rule-based DM, round execution
-- **Phase 2** — Real DM Agent: LangGraph lifecycle, prompt engineering, structured output, LLM contradiction resolution
+- **Phase 2** ✅ — Real DM Agent: LangGraph lifecycle, prompt engineering, structured output, LLM contradiction resolution
 - **Phase 3** — Full MVP: "village on fire" seed, 3 locations, 4 NPCs, save/load, playable CLI
 - **Phase 4** — Content Pipeline: data-driven seeds, validation, UI-ready structure
 - **Phase 5+** — NPC agents, UI, PostgreSQL
