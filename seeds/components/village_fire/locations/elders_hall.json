@@ -1,0 +1,50 @@
+{
+  "id": "elders_hall",
+  "name": "Elder's Hall",
+  "description": "A sturdy stone building where the village council meets. Currently sheltering some refugees.",
+  "tags": [
+    "urban",
+    "indoor",
+    "safe",
+    "official"
+  ],
+  "environment": {
+    "conditions": [
+      "crowded"
+    ],
+    "objects": [
+      {
+        "id": "council_table",
+        "name": "Council Table",
+        "description": "A large oak table where elders deliberate.",
+        "quantity": 1
+      },
+      {
+        "id": "emergency_supplies",
+        "name": "Emergency Supplies",
+        "description": "Blankets, bandages, and dried food.",
+        "quantity": 1
+      }
+    ],
+    "resources": {
+      "blankets": 10,
+      "bandages": 20,
+      "food_rations": 15
+    },
+    "flags": {
+      "shelter_active": true
+    }
+  },
+  "connections": [
+    {
+      "target_id": "village_square",
+      "type": "road",
+      "travel_time": 2,
+      "propagation_modifier": 0.8
+    }
+  ],
+  "characters": [
+    "npc_elara"
+  ],
+  "pending_effects": []
+}

@@ -1,0 +1,51 @@
+{
+  "id": "village_square",
+  "name": "Village Square",
+  "description": "The central gathering place of Oakhaven. A stone well sits in the middle, surrounded by benches and a notice board.",
+  "tags": [
+    "urban",
+    "central",
+    "outdoor"
+  ],
+  "environment": {
+    "conditions": [
+      "smoky"
+    ],
+    "objects": [
+      {
+        "id": "stone_well",
+        "name": "Stone Well",
+        "description": "The village's main water source.",
+        "quantity": 1
+      },
+      {
+        "id": "notice_board",
+        "name": "Notice Board",
+        "description": "A wooden board with village announcements.",
+        "quantity": 1
+      }
+    ],
+    "resources": {
+      "water": 50
+    },
+    "flags": {}
+  },
+  "connections": [
+    {
+      "target_id": "marketplace",
+      "type": "path",
+      "travel_time": 1,
+      "propagation_modifier": 1.0
+    },
+    {
+      "target_id": "elders_hall",
+      "type": "road",
+      "travel_time": 2,
+      "propagation_modifier": 0.8
+    }
+  ],
+  "characters": [
+    "pc_1"
+  ],
+  "pending_effects": []
+}

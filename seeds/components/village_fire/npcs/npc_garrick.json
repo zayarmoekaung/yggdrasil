@@ -1,0 +1,39 @@
+{
+  "id": "npc_garrick",
+  "name": "Garrick",
+  "type": "npc",
+  "location_id": "marketplace",
+  "stats": {
+    "str": 14,
+    "dex": 9,
+    "con": 13,
+    "int": 8,
+    "wis": 10,
+    "cha": 11
+  },
+  "inventory": [
+    {
+      "id": "grain_sack",
+      "name": "Grain Sack",
+      "description": "Half-burnt sack of wheat.",
+      "quantity": 1
+    }
+  ],
+  "personality": "Gruff merchant, cares more about his goods than people. Stubborn and loud.",
+  "goals": [
+    "Save his remaining grain",
+    "Blame someone for the fire"
+  ],
+  "secrets": [
+    "He was storing lantern oil near the grain — the real cause"
+  ],
+  "quickness": 3,
+  "memory": [],
+  "relationships": {
+    "npc_mira": -20,
+    "npc_elara": -10
+  },
+  "conditions": [
+    "panicked"
+  ]
+}

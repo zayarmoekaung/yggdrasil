@@ -1,0 +1,56 @@
+{
+  "id": "marketplace",
+  "name": "Marketplace",
+  "description": "A bustling market area now engulfed in flames. Stalls are burning and smoke fills the air.",
+  "tags": [
+    "urban",
+    "market",
+    "outdoor",
+    "dangerous"
+  ],
+  "environment": {
+    "conditions": [
+      "on_fire",
+      "smoky",
+      "chaotic"
+    ],
+    "objects": [
+      {
+        "id": "burning_stall_1",
+        "name": "Burning Grain Stall",
+        "description": "Garrick's grain stall, fully engulfed.",
+        "quantity": 1
+      },
+      {
+        "id": "burning_stall_2",
+        "name": "Burning Cloth Stall",
+        "description": "Mira's cloth stall, flames spreading.",
+        "quantity": 1
+      }
+    ],
+    "resources": {},
+    "flags": {
+      "fire_origin": true,
+      "fire_intensity": 8
+    }
+  },
+  "connections": [
+    {
+      "target_id": "village_square",
+      "type": "path",
+      "travel_time": 1,
+      "propagation_modifier": 1.0
+    },
+    {
+      "target_id": "riverside",
+      "type": "path",
+      "travel_time": 3,
+      "propagation_modifier": 0.5
+    }
+  ],
+  "characters": [
+    "npc_garrick",
+    "npc_mira"
+  ],
+  "pending_effects": []
+}

@@ -81,7 +81,8 @@ class TestDMAgentFallback:
 
     def test_fallback_produces_narrative(self, dm_agent, sample_pool, sample_characters):
         resolution = dm_agent._fallback_resolve(sample_pool, sample_characters)
-        assert "marketplace" in resolution.narrative.lower()
+        # Narrative includes character names and action intents
+        assert "garrick" in resolution.narrative.lower() or "mira" in resolution.narrative.lower()
         assert resolution.world_notes == ""
 
 

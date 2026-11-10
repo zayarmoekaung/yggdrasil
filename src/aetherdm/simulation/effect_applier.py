@@ -7,10 +7,34 @@ from aetherdm.models import Character, Effect, LocationNode
 
 
 def _apply_changes_to_dict(data: dict[str, Any], changes: dict[str, Any]) -> None:
-    """Recursively apply changes to a nested dict."""
+    """Recursively apply changes to a nested dict.
+
+    - Numeric values are added (supports deltas like fire_intensity: -2).
+    - List values are extended (conditions are appended, not replaced).
+    - Dict values are merged recursively.
+    - Other values are set directly.
+
+    Exception: 'conditions' within 'environment' (location environment conditions)
+    are replaced directly rather than extended, since they represent the current
+    state of the location, not cumulative additions.
+    """
     for key, value in changes.items():
-        if isinstance(value, dict) and isinstance(data.get(key), dict):
-            _apply_changes_to_dict(data[key], value)
+        if key not in data:
+            data[key] = value
+        elif isinstance(value, dict) and isinstance(data.get(key), dict):
+            # Special case: location environment conditions should be replaced, not extended
+            if key == "environment" and "conditions" in value and isinstance(data[key].get("conditions"), list):
+                data[key]["conditions"] = value["conditions"]
+                # Apply any remaining environment changes
+                for k, v in value.items():
+                    if k != "conditions":
+                        _apply_changes_to_dict(data[key], {k: v})
+            else:
+                _apply_changes_to_dict(data[key], value)
+        elif isinstance(value, (int, float)) and isinstance(data.get(key), (int, float)):
+            data[key] = data[key] + value
+        elif isinstance(value, list) and isinstance(data.get(key), list):
+            data[key].extend(value)
         else:
             data[key] = value
 
@@ -67,7 +91,9 @@ def apply_effect(
                         k: v for k, v in effect.changes.items() if k not in ("from_id", "to_id")
                     }
                     conn_data = conn.model_dump()
-                    _apply_changes_to_dict(conn_data, changes_copy)
+                    # Edge effects use direct replacement (absolute values), not deltas
+                    for key, value in changes_copy.items():
+                        conn_data[key] = value
                     # Update the connection in place
                     from aetherdm.models import Connection
                     idx = loc.connections.index(conn)

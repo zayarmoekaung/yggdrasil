@@ -46,7 +46,7 @@ def engine(tmp_path: Path):
     )
     repo.save_character(villain)
 
-    eng = SimulationEngine(repo)
+    eng = SimulationEngine(repo, use_llm=False)
     eng._load_world_state()
     yield eng
 

@@ -91,7 +91,7 @@ class TestSeedLoader:
         bad_seed = tmp_path / "bad.json"
         bad_seed.write_text('{"name": "test"}', encoding="utf-8")
         loader = SeedLoader(repo)
-        with pytest.raises(ValueError, match="missing required keys"):
+        with pytest.raises(ValueError, match="Seed validation failed"):
             loader.load(bad_seed)
 
     def test_village_fire_seed(self, repo: Repository):

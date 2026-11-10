@@ -92,7 +92,7 @@
   "characters": [
     {
       "id": "pc_1",
-      "name": "Player Character",
+      "name": "Ko Toke Kyi",
       "type": "pc",
       "location_id": "village_square",
       "stats": {"str": 10, "dex": 12, "con": 11, "int": 13, "wis": 14, "cha": 9},

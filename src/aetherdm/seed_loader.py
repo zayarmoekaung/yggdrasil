@@ -3,8 +3,12 @@
 import json
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from aetherdm.db.repository import Repository
 from aetherdm.models import Character, LocationNode
+from aetherdm.models.seed import SeedWorld
+from aetherdm.seed_validator import validate_seed_data
 
 
 class SeedLoader:
@@ -19,27 +23,14 @@ class SeedLoader:
         with open(seed_path, "r", encoding="utf-8") as f:
             seed_data = json.load(f)
 
-        self._validate_seed(seed_data)
+        # Validate with Pydantic models + cross-reference checks
+        seed, errors = validate_seed_data(seed_data)
+        if errors:
+            error_msgs = "\n".join(f"  - {e}" for e in errors)
+            raise ValueError(f"Seed validation failed:\n{error_msgs}")
+
         self._persist_seed(seed_data)
         return seed_data
-
-    def _validate_seed(self, data: dict) -> None:
-        """Basic validation — ensure required top-level keys exist."""
-        required_keys = {"name", "locations", "characters"}
-        missing = required_keys - set(data.keys())
-        if missing:
-            raise ValueError(f"Seed is missing required keys: {missing}")
-
-        # Validate each location has id and name
-        for loc in data["locations"]:
-            if "id" not in loc or "name" not in loc:
-                raise ValueError(f"Location seed missing required fields: {loc}")
-
-        # Validate each character has id, name, type, location_id
-        for ch in data["characters"]:
-            for field in ("id", "name", "type", "location_id"):
-                if field not in ch:
-                    raise ValueError(f"Character seed missing required field '{field}': {ch}")
 
     def _persist_seed(self, data: dict) -> None:
         """Save all locations and characters from the seed to the repository."""

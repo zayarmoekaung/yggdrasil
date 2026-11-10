@@ -5,6 +5,7 @@ src/aetherdm/__init__.py
 src/aetherdm/config.py
 src/aetherdm/main.py
 src/aetherdm/seed_loader.py
+src/aetherdm/session.py
 src/aetherdm.egg-info/PKG-INFO
 src/aetherdm.egg-info/SOURCES.txt
 src/aetherdm.egg-info/dependency_links.txt
@@ -13,6 +14,7 @@ src/aetherdm.egg-info/requires.txt
 src/aetherdm.egg-info/top_level.txt
 src/aetherdm/agents/__init__.py
 src/aetherdm/agents/dm_agent.py
+src/aetherdm/agents/dm_graph.py
 src/aetherdm/db/__init__.py
 src/aetherdm/db/graph.py
 src/aetherdm/db/repository.py
@@ -21,11 +23,21 @@ src/aetherdm/llm/provider.py
 src/aetherdm/models/__init__.py
 src/aetherdm/models/action_pool.py
 src/aetherdm/models/character.py
+src/aetherdm/models/dm_output.py
 src/aetherdm/models/effect.py
 src/aetherdm/models/event.py
 src/aetherdm/models/game_state.py
 src/aetherdm/models/location.py
 src/aetherdm/simulation/__init__.py
+src/aetherdm/simulation/effect_applier.py
+src/aetherdm/simulation/eligibility.py
 src/aetherdm/simulation/engine.py
+src/aetherdm/simulation/reaction.py
+tests/test_dm_agent.py
+tests/test_effect_applier.py
+tests/test_eligibility.py
+tests/test_engine.py
 tests/test_models.py
+tests/test_reaction.py
 tests/test_seed_loader.py
+tests/test_session.py

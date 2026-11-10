@@ -1,0 +1,40 @@
+{
+  "id": "npc_mira",
+  "name": "Mira",
+  "type": "npc",
+  "location_id": "marketplace",
+  "stats": {
+    "str": 8,
+    "dex": 15,
+    "con": 10,
+    "int": 14,
+    "wis": 12,
+    "cha": 16
+  },
+  "inventory": [
+    {
+      "id": "cloth_bolt",
+      "name": "Cloth Bolt",
+      "description": "A bolt of silk, slightly singed.",
+      "quantity": 1
+    }
+  ],
+  "personality": "Quick-witted weaver. Tries to keep everyone calm. Natural leader.",
+  "goals": [
+    "Get people to safety",
+    "Save what goods she can",
+    "Keep order"
+  ],
+  "secrets": [
+    "She saw Garrick's lantern tip over but hasn't said anything"
+  ],
+  "quickness": 8,
+  "memory": [],
+  "relationships": {
+    "npc_garrick": -30,
+    "npc_elara": 40
+  },
+  "conditions": [
+    "alarmed"
+  ]
+}

@@ -1,6 +1,7 @@
 """Simulation engine — main round loop with rule-based pool resolution."""
 
 from aetherdm.agents.dm_agent import DMAgent
+from aetherdm.baresexp_codec import encode_pool, encode_world_state, total_token_count
 from aetherdm.db.repository import Repository
 from aetherdm.models import ActionEntry, ActionPool, Character, Effect, Event, GameState, LocationNode
 from aetherdm.simulation.effect_applier import apply_effect
@@ -15,12 +16,27 @@ class SimulationEngine:
     Phase 2+: Will integrate LangGraph DM Agent + LLM for pool resolution.
     """
 
-    def __init__(self, repo: Repository):
+    def __init__(self, repo: Repository, use_llm: bool = True, debug: bool = False):
         self.repo = repo
         self.game_state = GameState()
-        self.dm_agent = DMAgent()
+        self.dm_agent = self._init_dm_agent(use_llm, debug)
         self._locations: dict[str, LocationNode] = {}
         self._characters: dict[str, Character] = {}
+        # BareSexp storage for background location summaries (compact, not verbose)
+        self._location_baresexp: dict[str, str] = {}
+        self._last_token_count: int = 0
+
+    def _init_dm_agent(self, use_llm: bool, debug: bool) -> DMAgent:
+        """Create DM agent with LLM provider if available."""
+        if use_llm:
+            try:
+                from aetherdm.llm.provider import LLMProvider
+                llm = LLMProvider()
+                return DMAgent(llm=llm, debug=debug)
+            except Exception:
+                # Fall back to rule-based if LLM provider can't be initialized
+                pass
+        return DMAgent(debug=debug)
 
     def start_session(self, seed_name: str) -> None:
         """Initialize a new game session from a seed."""
@@ -76,20 +92,46 @@ class SimulationEngine:
             self.repo.save_action_pool(pool)
         return pool
 
-    def resolve_pool(self, pool: ActionPool) -> list[Effect]:
+    def resolve_pool(
+        self,
+        pool: ActionPool,
+        pc_location_id: str | None = None,
+    ) -> list[Effect]:
         """Resolve an action pool using the LLM-powered DM Agent.
 
         Phase 2: DM Agent receives full context (location state, characters, actions)
         and returns structured Effects + narrative via LLM. Falls back to rule-based
         if LLM is unavailable.
 
+        Args:
+            pool: The action pool to resolve.
+            pc_location_id: If set, this location gets verbose narration.
+                           Other locations are resolved silently with compact baresexp storage.
+
         Steps:
         1. Get eligible characters at the location
-        2. Build context for DM Agent
+        2. Build context for DM Agent (baresexp for fewer tokens)
         3. DM Agent resolves actions with full contextual understanding
         4. Effects are applied and logged
-        5. Narrative is returned
+        5. Narrative is returned (verbose for PC location, compact for others)
         """
+        # Guard against double-resolution
+        if pool.status in ("locked", "resolved"):
+            if pool.status == "resolved":
+                return []
+
+        # Deduplicate actions: keep only unique (character_id, intent) pairs
+        seen: set[tuple[str, str]] = set()
+        unique_actions: list[ActionEntry] = []
+        for a in pool.actions:
+            key = (a.character_id, a.intent)
+            if key not in seen:
+                seen.add(key)
+                unique_actions.append(a)
+        if len(unique_actions) < len(pool.actions):
+            pool.actions = unique_actions
+            self.repo.save_action_pool(pool)
+
         # Get characters at this location
         location = self._locations.get(pool.location_id)
         if location is None:
@@ -104,8 +146,26 @@ class SimulationEngine:
         # Filter eligible
         eligible = filter_eligible(chars_at_location)
 
-        # DM Agent resolves the pool
-        resolution = self.dm_agent.resolve_pool_sync(pool, location, eligible)
+        # Determine if this is the PC's location (verbose) or background (compact)
+        is_pc_location = pc_location_id is None or pool.location_id == pc_location_id
+
+        # DM Agent resolves the pool — use baresexp for context (fewer tokens)
+        resolution = self.dm_agent.resolve_pool_sync(
+            pool, location, eligible, use_baresexp=True
+        )
+
+        # Store narrative: verbose for PC location, compact baresexp for others
+        if is_pc_location:
+            self._last_narrative = resolution.narrative
+            # Clear baresexp for PC location (we're showing verbose)
+            self._location_baresexp.pop(pool.location_id, None)
+        else:
+            # Background location: store compact baresexp summary
+            pool_result = encode_pool(pool, mode="minimal")
+            self._location_baresexp[pool.location_id] = pool_result.baresexp
+            self._last_token_count = pool_result.token_count
+            # Set a minimal narrative for internal use
+            self._last_narrative = resolution.narrative
 
         # Convert resolution to effects
         effects = self.dm_agent.resolution_to_effects(resolution)
@@ -142,7 +202,7 @@ class SimulationEngine:
         Phase 2: Uses the narrative from the DM Agent's resolution if available,
         otherwise falls back to the simple effect listing.
         """
-        # Try to get the last resolution's narrative
+        # Use the narrative stored by resolve_pool
         if hasattr(self, "_last_narrative") and self._last_narrative:
             return f"[Round {pool.round}] {pool.location_id}:\n{self._last_narrative}"
 
@@ -151,3 +211,28 @@ class SimulationEngine:
         for effect in effects:
             lines.append(f"  - {effect.description}")
         return "\n".join(lines)
+
+    def get_background_summary(self) -> str:
+        """Get a compact summary of what happened at background locations.
+
+        Returns baresexp summaries for all non-PC locations that were resolved.
+        """
+        if not self._location_baresexp:
+            return "(no background activity)"
+        lines = []
+        for loc_id, baresexp_str in self._location_baresexp.items():
+            # Extract a short summary from the baresexp
+            summary = baresexp_str.replace("\n", " ")[:120]
+            lines.append(f"  {loc_id}: {summary}")
+        return "\n".join(lines)
+
+    def get_world_baresexp(self) -> tuple[str, int]:
+        """Encode the entire world state as compact baresexp.
+
+        Returns (baresexp_string, token_count).
+        Useful for save/load or sending to the DM as full context.
+        """
+        locations = list(self._locations.values())
+        characters = list(self._characters.values())
+        result = encode_world_state(locations, characters, self.game_state.current_round)
+        return result.baresexp, result.token_count

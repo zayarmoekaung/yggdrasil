@@ -1,0 +1,41 @@
+{
+  "id": "riverside",
+  "name": "Riverside",
+  "description": "The riverbank below the village. A good source of water and a potential firebreak.",
+  "tags": [
+    "outdoor",
+    "water",
+    "safe"
+  ],
+  "environment": {
+    "conditions": [],
+    "objects": [
+      {
+        "id": "river",
+        "name": "River",
+        "description": "The Oakhaven River, flowing steadily.",
+        "quantity": 1
+      },
+      {
+        "id": "buckets",
+        "name": "Water Buckets",
+        "description": "A stack of wooden buckets near the bank.",
+        "quantity": 5
+      }
+    ],
+    "resources": {
+      "water": 999
+    },
+    "flags": {}
+  },
+  "connections": [
+    {
+      "target_id": "marketplace",
+      "type": "path",
+      "travel_time": 3,
+      "propagation_modifier": 0.5
+    }
+  ],
+  "characters": [],
+  "pending_effects": []
+}

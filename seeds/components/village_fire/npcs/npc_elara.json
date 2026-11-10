@@ -1,0 +1,38 @@
+{
+  "id": "npc_elara",
+  "name": "Elara",
+  "type": "npc",
+  "location_id": "elders_hall",
+  "stats": {
+    "str": 9,
+    "dex": 10,
+    "con": 11,
+    "int": 16,
+    "wis": 15,
+    "cha": 14
+  },
+  "inventory": [
+    {
+      "id": "elder_staff",
+      "name": "Elder's Staff",
+      "description": "A wooden staff symbolizing authority.",
+      "quantity": 1
+    }
+  ],
+  "personality": "Wise village elder. Calm under pressure, focused on community welfare.",
+  "goals": [
+    "Organize evacuation",
+    "Protect the vulnerable",
+    "Assess the damage"
+  ],
+  "secrets": [
+    "She suspects arson but won't say it publicly yet"
+  ],
+  "quickness": 5,
+  "memory": [],
+  "relationships": {
+    "npc_garrick": -10,
+    "npc_mira": 40
+  },
+  "conditions": []
+}

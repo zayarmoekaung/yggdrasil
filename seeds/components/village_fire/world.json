@@ -1,0 +1,8 @@
+{
+  "name": "village_fire",
+  "description": "A small village where a fire has broken out in the marketplace. NPCs are reacting to the crisis.",
+  "global_flags": {
+    "crisis_active": true,
+    "starting_round": 1
+  }
+}
