@@ -1,8 +1,9 @@
 """BareSexp serialization codec — converts Pydantic models to/from compact s-expressions."""
 
+import json
 from typing import Any, NamedTuple
 
-from baresexp import BareSexpBuilder, BareSexpDocument, BareSexpResult, builder, compile_baresexp, parse_baresexp
+from baresexp import BareSexpBuilder, BareSexpDocument, BareSexpResult, CompileOptions, Step, builder, compile_baresexp, parse_baresexp
 
 from aetherdm.models import (
     ActionPool,
@@ -288,29 +289,33 @@ def build_dm_document(
             "Each resolved_action needs: character_id, intent, success_level, effects (array), description",
             "Each effect needs: target_type (location|character|world|edge), target_id, changes (dict), description",
             "Success levels: critical|success|partial|failure|critical_failure",
+            "For character changes: memory entries must be {round: int, text: str} — NOT plain strings",
+            "For character changes: inventory items must be {id: str, name: str, description: str, quantity: int}",
+            "For character changes: stats and relationships values must be integers",
+            "For location changes: environment objects must be {id: str, name: str, description: str, quantity: int}",
+            "For location changes: environment resources must be {name: str, amount: int} pairs",
         ]
 
-    # Build raw encoded state for task content
-    data_parts = [
-        encode_location(location, mode=mode).baresexp,
-        encode_pool(pool, mode=mode).baresexp,
-    ]
-    for ch in characters:
-        data_parts.append(encode_character(ch, mode=mode).baresexp)
-    raw_state = "\n".join(data_parts)
+    # Build JSON payload for the task content field.
+    # The content field holds DATA (what to process), while description+steps hold INSTRUCTIONS (how to process it).
+    # TODO: Switch from JSON to baresexp data-payload when baresexp adds a dedicated data container type
+    # (currently `task` is semantically for instructions, so using it for data confuses the LLM).
+    payload = json.dumps({
+        "location": location.model_dump(),
+        "pool": pool.model_dump(),
+        "characters": [ch.model_dump() for ch in characters],
+    })
 
-    # Build steps for the task (embedded in description since steps need Step objects)
-    step_descriptions = [
-        "1. gather-context: Read the encoded state below",
-        "2. interpret-intentions: Analyze contradictions, synergies, independence",
-        "3. apply-judgment: Consider personality, goals, quickness, conditions",
-        "4. emit-effects: Produce Effects as target_type+target_id+changes for each action",
-        "5. narrate: Write concise narrative of what actually happened",
+    # Build instruction steps for the task
+    task_steps = [
+        ("read-payload", "Read the JSON-encoded location, pool, and character data in the content field"),
+        ("interpret-intentions", "Analyze contradictions, synergies, independence between declared actions"),
+        ("apply-judgment", "Consider personality, goals, quickness, conditions when resolving each action"),
+        ("emit-effects", "Produce Effects as target_type+target_id+changes for each resolved action"),
+        ("narrate", "Write concise narrative of what actually happened at this location"),
     ]
-    pipeline_text = "\n".join(step_descriptions)
 
-    # Build the document — use minimal for context, but append raw state manually
-    # because minimal mode's grammar reduction shortens the content field too aggressively.
+    # Build the document: minimal context + task with JSON payload
     doc = (
         BareSexpDocument()
         .minimal()
@@ -329,19 +334,120 @@ def build_dm_document(
         )
         .task(
             name="resolve-pool",
-            description=f"Resolve {len(pool.actions)} action(s) at {location.id}. Pipeline: {pipeline_text}",
+            description=(
+                f"Resolve {len(pool.actions)} action(s) at {location.id}. "
+                f"Read the JSON payload in the content field, follow the steps below, "
+                f"and return structured output."
+            ),
+            content=payload,
+            steps=[
+                Step(name="read-payload", description="Read the JSON-encoded location, pool, and character data in the content field"),
+                Step(name="interpret-intentions", description="Analyze contradictions, synergies, independence between declared actions"),
+                Step(name="apply-judgment", description="Consider personality, goals, quickness, conditions when resolving each action"),
+                Step(name="emit-effects", description="Produce Effects as target_type+target_id+changes for each resolved action"),
+                Step(name="narrate", description="Write concise narrative of what actually happened at this location"),
+            ],
         )
     )
 
-    # Calculate token count from compiled parts
-    parts = doc.compile_parts()
-    # Append raw encoded state to the task (un-shortened, needed by LLM)
-    full_task = parts.task + "\n\n;; Raw encoded state\n" + raw_state
-    total_tokens = _count_tokens(parts.context) + _count_tokens(full_task)
+    # Compile context in minimal mode (compact system prompt)
+    ctx_result = doc.compile_context(options=CompileOptions(mode='minimal',condense=True))
+    system_msg = ctx_result.baresexp
+
+    # Compile task in full mode to preserve the JSON content verbatim
+    task_result = doc.compile_task(options=CompileOptions(mode='full',condense=True))
+    user_msg = task_result.baresexp
+
+    total_tokens = _count_tokens(system_msg) + _count_tokens(user_msg)
 
     return DMPromptParts(
-        system_msg=parts.context,
-        user_msg=full_task,
+        system_msg=system_msg,
+        user_msg=user_msg,
+        document=doc,
+        token_count=total_tokens,
+    )
+
+
+# ── Narration Document Builder ──
+
+
+def build_narrate_document(
+    location: LocationNode,
+    pool: ActionPool,
+    resolution_narrative: str,
+    action_details: list[str],
+    mode: str = "minimal",
+) -> DMPromptParts:
+    """Build a BareSexpDocument for the narration model call.
+
+    Uses the same context/task split as build_dm_document for uniformity:
+    - Context (minimal) → system prompt: narrator role, constraints, location facts
+    - Task (full) → user message: instruction to expand resolution narrative, with
+      the resolution narrative + action details as JSON content payload
+
+    Returns:
+        DMPromptParts(system_msg, user_msg, document, token_count)
+    """
+    loc_conditions = ",".join(location.environment.conditions) if location.environment.conditions else "calm"
+
+    # Payload: resolution narrative + action details as structured data
+    payload = json.dumps({
+        "resolution_narrative": resolution_narrative,
+        "action_details": action_details,
+        "location": {
+            "id": location.id,
+            "name": location.name,
+            "description": location.description,
+            "conditions": location.environment.conditions,
+        },
+        "round": pool.round,
+    })
+
+    doc = (
+        BareSexpDocument()
+        .minimal()
+        .context(
+            name="narrator",
+            role="You are a Dungeon Master writing vivid narrative prose for a text-based RPG.",
+            domain="fantasy-roleplay-simulation",
+            constraints=[
+                "Return ONLY the narrative text — no markdown, no code blocks, no meta-commentary",
+                "DO NOT invent new events, actions, or outcomes — only embellish what is given",
+                "Set the scene, convey sensory details and emotions, but stay faithful to the facts",
+                "Write in second person present tense where appropriate",
+                "Keep it to 2-4 paragraphs",
+            ],
+            facts=[
+                f"Location: {location.name} — conditions=[{loc_conditions}]",
+                f"Round: {pool.round}",
+            ],
+        )
+        .task(
+            name="expand-narrative",
+            description=(
+                "Expand the resolution narrative in the content field into vivid prose. "
+                "Stay faithful to every event — do not add, remove, or change outcomes."
+            ),
+            content=payload,
+            steps=[
+                Step(name="read-resolution", description="Read the resolution narrative and action details from the content field"),
+                Step(name="embellish", description="Add sensory details, atmosphere, and emotional resonance without changing facts"),
+                Step(name="output", description="Return the expanded narrative as plain text"),
+            ],
+        )
+    )
+
+    ctx_result = doc.compile_context()
+    system_msg = ctx_result.baresexp
+
+    task_result = doc.compile_task(options=CompileOptions(mode='full'))
+    user_msg = task_result.baresexp
+
+    total_tokens = _count_tokens(system_msg) + _count_tokens(user_msg)
+
+    return DMPromptParts(
+        system_msg=system_msg,
+        user_msg=user_msg,
         document=doc,
         token_count=total_tokens,
     )

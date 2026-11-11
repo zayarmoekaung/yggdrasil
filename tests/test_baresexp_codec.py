@@ -1,5 +1,6 @@
 """Tests for BareSexpDocument-based DM prompt building."""
 
+import json
 import pytest
 from baresexp import BareSexpDocument
 
@@ -56,16 +57,41 @@ class TestBuildDMDocument:
         assert prompt.system_msg
         assert prompt.user_msg
 
-    def test_user_msg_contains_raw_encoded_state(self, sample_pool, sample_location, sample_characters):
+    def test_user_msg_contains_json_payload_in_content(self, sample_pool, sample_location, sample_characters):
+        """Task content field should contain JSON data payload (not bare text after the task)."""
         prompt = build_dm_document(sample_pool, sample_location, sample_characters)
-        assert ";; Raw encoded state" in prompt.user_msg
-        # Minimal mode shortens identifiers but key references remain
-        assert "location" in prompt.user_msg
-        assert "marketplace" in prompt.user_msg
-        assert "npc-garrick" in prompt.user_msg or "garrick" in prompt.user_msg
+        # The content field should contain a JSON object with location, pool, characters
+        assert '(content ' in prompt.user_msg
+        # Full mode escapes JSON quotes as \\" — check for the escaped form
+        assert '\\"location\\"' in prompt.user_msg
+        assert '\\"pool\\"' in prompt.user_msg
+        assert '\\"characters\\"' in prompt.user_msg
+        # Verify the content field contains parseable JSON by extracting it robustly
+        # Find the content value between (content " and the closing ")
+        import re
+        match = re.search(r'\(content "(.+?)"\)\s*\(steps', prompt.user_msg, re.DOTALL)
+        if not match:
+            match = re.search(r'\(content "(.+?)"\)\s*\)', prompt.user_msg, re.DOTALL)
+        assert match, "Could not find (content ...) in user_msg"
+        content_str = match.group(1).replace('\\"', '"')
+        data = json.loads(content_str)
+        assert "location" in data
+        assert "pool" in data
+        assert "characters" in data
+        assert len(data["characters"]) == 2
+
+    def test_user_msg_has_instruction_steps(self, sample_pool, sample_location, sample_characters):
+        """Task should have steps describing the resolution pipeline (instructions, not data)."""
+        prompt = build_dm_document(sample_pool, sample_location, sample_characters)
+        assert "(steps" in prompt.user_msg
+        assert "read-payload" in prompt.user_msg
+        assert "interpret-intentions" in prompt.user_msg
+        assert "emit-effects" in prompt.user_msg
+        assert "narrate" in prompt.user_msg
 
     def test_system_msg_contains_constraints(self, sample_pool, sample_location, sample_characters):
         prompt = build_dm_document(sample_pool, sample_location, sample_characters)
+        # Minimal mode shortens text, so check for shortened forms
         assert "resolved-actions" in prompt.system_msg.lower() or "json-keys" in prompt.system_msg.lower()
 
     def test_baresexp_output_format_changes_constraints(self, sample_pool, sample_location, sample_characters):

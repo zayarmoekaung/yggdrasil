@@ -211,6 +211,170 @@ class TestDMAgentParsing:
             assert resolution2.resolved_actions[0].character_id == "pc"
 
 
+class TestDMASanitization:
+    """Test that effect changes are sanitized to match Pydantic schemas."""
+
+    def test_memory_strings_converted_to_entries(self, dm_agent):
+        """LLM may write memory as plain strings — should become {round, text} dicts."""
+        resolution = DMResolution(
+            resolved_actions=[{
+                "character_id": "npc_mira",
+                "intent": "remember",
+                "success_level": "success",
+                "effects": [{
+                    "target_type": "character",
+                    "target_id": "npc_mira",
+                    "changes": {"memory": ["Mira says the fire began when Garrick tipped his lantern."]},
+                    "description": "Mira remembers.",
+                }],
+                "description": "Mira remembers.",
+            }],
+            narrative="",
+            world_notes="",
+        )
+        effects = dm_agent.resolution_to_effects(resolution)
+        assert len(effects) == 1
+        # Should not raise ValidationError
+        assert effects[0].changes["memory"] == [{"round": 0, "text": "Mira says the fire began when Garrick tipped his lantern."}]
+
+    def test_memory_dicts_filled_defaults(self, dm_agent):
+        """Memory dicts missing 'round' get default 0."""
+        resolution = DMResolution(
+            resolved_actions=[{
+                "character_id": "x",
+                "intent": "x",
+                "success_level": "success",
+                "effects": [{
+                    "target_type": "character",
+                    "target_id": "x",
+                    "changes": {"memory": [{"text": "something happened"}]},
+                    "description": "",
+                }],
+                "description": "",
+            }],
+            narrative="", world_notes="",
+        )
+        effects = dm_agent.resolution_to_effects(resolution)
+        assert effects[0].changes["memory"] == [{"round": 0, "text": "something happened"}]
+
+    def test_inventory_strings_converted(self, dm_agent):
+        """Inventory items as strings become proper objects."""
+        resolution = DMResolution(
+            resolved_actions=[{
+                "character_id": "x", "intent": "x", "success_level": "success",
+                "effects": [{
+                    "target_type": "character", "target_id": "x",
+                    "changes": {"inventory": ["Iron Sword"]},
+                    "description": "",
+                }],
+                "description": "",
+            }],
+            narrative="", world_notes="",
+        )
+        effects = dm_agent.resolution_to_effects(resolution)
+        inv = effects[0].changes["inventory"]
+        assert len(inv) == 1
+        assert inv[0]["name"] == "Iron Sword"
+        assert inv[0]["id"] == "iron_sword"
+        assert inv[0]["quantity"] == 1
+
+    def test_stats_coerced_to_int(self, dm_agent):
+        """Stats values are coerced to int."""
+        resolution = DMResolution(
+            resolved_actions=[{
+                "character_id": "x", "intent": "x", "success_level": "success",
+                "effects": [{
+                    "target_type": "character", "target_id": "x",
+                    "changes": {"stats": {"str": "10", "dex": 12.5}},
+                    "description": "",
+                }],
+                "description": "",
+            }],
+            narrative="", world_notes="",
+        )
+        effects = dm_agent.resolution_to_effects(resolution)
+        stats = effects[0].changes["stats"]
+        assert stats["str"] == 10
+        assert stats["dex"] == 12
+
+    def test_nested_environment_objects_sanitized(self, dm_agent):
+        """Environment objects inside environment dict are sanitized."""
+        resolution = DMResolution(
+            resolved_actions=[{
+                "character_id": "x", "intent": "x", "success_level": "success",
+                "effects": [{
+                    "target_type": "location", "target_id": "marketplace",
+                    "changes": {"environment": {"objects": ["Bucket", "Hose"]}},
+                    "description": "",
+                }],
+                "description": "",
+            }],
+            narrative="", world_notes="",
+        )
+        effects = dm_agent.resolution_to_effects(resolution)
+        objs = effects[0].changes["environment"]["objects"]
+        assert objs[0]["name"] == "Bucket"
+        assert objs[0]["id"] == "bucket"
+        assert objs[1]["name"] == "Hose"
+
+    def test_resources_list_converted_to_dict(self, dm_agent):
+        """LLM may send resources as [{name, value}] list — should become dict."""
+        resolution = DMResolution(
+            resolved_actions=[{
+                "character_id": "x", "intent": "x", "success_level": "success",
+                "effects": [{
+                    "target_type": "location", "target_id": "marketplace",
+                    "changes": {"environment": {"resources": [{"name": "smoke", "value": 6}]}},
+                    "description": "",
+                }],
+                "description": "",
+            }],
+            narrative="", world_notes="",
+        )
+        effects = dm_agent.resolution_to_effects(resolution)
+        res = effects[0].changes["environment"]["resources"]
+        assert res == {"smoke": 6}
+        assert isinstance(res, dict)
+
+    def test_resources_non_numeric_values_safe_coerced(self, dm_agent):
+        """Resources with non-numeric values (like LLM putting 'partial') don't crash."""
+        resolution = DMResolution(
+            resolved_actions=[{
+                "character_id": "x", "intent": "x", "success_level": "success",
+                "effects": [{
+                    "target_type": "location", "target_id": "marketplace",
+                    "changes": {"environment": {"resources": {"fire_intensity": "partial", "water": "10"}}},
+                    "description": "",
+                }],
+                "description": "",
+            }],
+            narrative="", world_notes="",
+        )
+        effects = dm_agent.resolution_to_effects(resolution)
+        res = effects[0].changes["environment"]["resources"]
+        assert res["fire_intensity"] == 0  # 'partial' → 0
+        assert res["water"] == 10  # '10' → 10
+
+    def test_stats_bool_values_coerced(self, dm_agent):
+        """Boolean stats are coerced to int (True→1, False→0)."""
+        resolution = DMResolution(
+            resolved_actions=[{
+                "character_id": "x", "intent": "x", "success_level": "success",
+                "effects": [{
+                    "target_type": "character", "target_id": "x",
+                    "changes": {"stats": {"str": True, "dex": False}},
+                    "description": "",
+                }],
+                "description": "",
+            }],
+            narrative="", world_notes="",
+        )
+        effects = dm_agent.resolution_to_effects(resolution)
+        stats = effects[0].changes["stats"]
+        assert stats["str"] == 1
+        assert stats["dex"] == 0
+
+
 class TestDMAgentNarration:
     def test_fallback_narrative(self, dm_agent):
         """Generate narrative without LLM."""
