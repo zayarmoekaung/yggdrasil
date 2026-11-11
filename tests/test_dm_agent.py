@@ -134,6 +134,60 @@ class TestDMAgentParsing:
         resolution = dm_agent.parse_llm_response(text)
         assert resolution.narrative == "Quiet night."
 
+    def test_parse_array_format(self, dm_agent):
+        """Handle LLM returning flat array: [seq_num, {action}, seq_num, {action}]."""
+        text = json.dumps([
+            3,
+            {
+                "characte_id": "pc",
+                "action": "run",
+                "intent": "ask her what happened",
+                "difficulty": 10,
+                "success": 7,
+                "narrative": "You dash towards Mira.",
+                "world_notes": "The PC manages to reach Mira.",
+            },
+            5,
+            {
+                "characte_id": "garrick",
+                "action": "inventory",
+                "intent": "look for something flammable",
+                "difficulty": 5,
+                "success": 100,
+                "narrative": "Garrick curses and kicks the lantern.",
+                "world_notes": "Garrick blames the fire on the lantern.",
+            },
+        ])
+        resolution = dm_agent.parse_llm_response(text)
+        assert len(resolution.resolved_actions) == 2
+        assert resolution.resolved_actions[0].character_id == "pc"
+        assert resolution.resolved_actions[1].character_id == "garrick"
+        # Narratives from individual actions are collected
+        assert "dash towards Mira" in resolution.narrative
+        assert "Garrick curses" in resolution.narrative
+
+    def test_parse_array_with_alternative_field_names(self, dm_agent):
+        """Handle array format with varied field names (characte_id, action, etc.)."""
+        text = json.dumps([
+            1,
+            {
+                "characte_id": "hero",
+                "action": "attack",
+                "narrative": "Hero strikes the goblin.",
+            },
+        ])
+        resolution = dm_agent.parse_llm_response(text)
+        assert len(resolution.resolved_actions) == 1
+        assert resolution.resolved_actions[0].character_id == "hero"
+        assert resolution.resolved_actions[0].intent == "attack"
+
+    def test_parse_array_empty(self, dm_agent):
+        """Handle empty array."""
+        text = json.dumps([])
+        resolution = dm_agent.parse_llm_response(text)
+        assert resolution.resolved_actions == []
+        assert resolution.narrative == ""
+
 
 class TestDMAgentEffectConversion:
     def test_resolution_to_effects(self, dm_agent):

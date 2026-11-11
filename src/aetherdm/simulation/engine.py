@@ -1,7 +1,7 @@
 """Simulation engine — main round loop with rule-based pool resolution."""
 
 from aetherdm.agents.dm_agent import DMAgent
-from aetherdm.baresexp_codec import encode_pool, encode_world_state, total_token_count
+from aetherdm.baresexp_codec import encode_world_state
 from aetherdm.db.repository import Repository
 from aetherdm.models import ActionEntry, ActionPool, Character, Effect, Event, GameState, LocationNode
 from aetherdm.simulation.effect_applier import apply_effect
@@ -22,8 +22,9 @@ class SimulationEngine:
         self.dm_agent = self._init_dm_agent(use_llm, debug)
         self._locations: dict[str, LocationNode] = {}
         self._characters: dict[str, Character] = {}
-        # BareSexp storage for background location summaries (compact, not verbose)
-        self._location_baresexp: dict[str, str] = {}
+        # Narrative summaries for background locations (readable one-liners)
+        self._location_narratives: dict[str, str] = {}
+        self._last_narrative: str = ""
         self._last_token_count: int = 0
 
     def _init_dm_agent(self, use_llm: bool, debug: bool) -> DMAgent:
@@ -154,17 +155,14 @@ class SimulationEngine:
             pool, location, eligible, use_baresexp=True
         )
 
-        # Store narrative: verbose for PC location, compact baresexp for others
+        # Store narrative: verbose for PC location, compact summary for others
         if is_pc_location:
             self._last_narrative = resolution.narrative
-            # Clear baresexp for PC location (we're showing verbose)
-            self._location_baresexp.pop(pool.location_id, None)
+            # Clear background narrative for PC location
+            self._location_narratives.pop(pool.location_id, None)
         else:
-            # Background location: store compact baresexp summary
-            pool_result = encode_pool(pool, mode="minimal")
-            self._location_baresexp[pool.location_id] = pool_result.baresexp
-            self._last_token_count = pool_result.token_count
-            # Set a minimal narrative for internal use
+            # Background location: store a concise narrative summary
+            self._location_narratives[pool.location_id] = resolution.narrative
             self._last_narrative = resolution.narrative
 
         # Convert resolution to effects
@@ -215,14 +213,12 @@ class SimulationEngine:
     def get_background_summary(self) -> str:
         """Get a compact summary of what happened at background locations.
 
-        Returns baresexp summaries for all non-PC locations that were resolved.
+        Returns readable one-line summaries for all non-PC locations that were resolved.
         """
-        if not self._location_baresexp:
+        if not self._location_narratives:
             return "(no background activity)"
         lines = []
-        for loc_id, baresexp_str in self._location_baresexp.items():
-            # Extract a short summary from the baresexp
-            summary = baresexp_str.replace("\n", " ")[:120]
+        for loc_id, summary in self._location_narratives.items():
             lines.append(f"  {loc_id}: {summary}")
         return "\n".join(lines)
 

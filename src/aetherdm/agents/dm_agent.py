@@ -80,8 +80,10 @@ class DMAgent:
     def parse_llm_response(self, text: str) -> DMResolution:
         """Parse the LLM's JSON response into a DMResolution object.
 
-        Handles both strict JSON mode and the LLM's tendency to use
-        alternative field names (action_id→intent, target/target_id, etc).
+        Handles multiple formats:
+        1. Strict JSON object with resolved_actions, narrative, world_notes
+        2. Flat array of [seq_num, {action_obj}, seq_num, {action_obj}, ...]
+        3. Alternative field names (action_id→intent, target/target_id, etc.)
         """
         # Try to extract JSON from markdown code blocks
         cleaned = text.strip()
@@ -95,27 +97,35 @@ class DMAgent:
 
         data = json.loads(cleaned)
 
-        # Normalize LLM's alternative field names to match DMResolution schema
+        # Handle flat array format: [seq_num, {action}, seq_num, {action}, ...]
+        if isinstance(data, list):
+            resolved_actions = []
+            narrative_parts = []
+            i = 0
+            while i < len(data):
+                # Skip numeric sequence keys
+                if isinstance(data[i], (int, float)):
+                    i += 1
+                    continue
+                obj = data[i]
+                if isinstance(obj, dict):
+                    normalized = self._normalize_action(obj)
+                    resolved_actions.append(normalized)
+                    if obj.get("narrative"):
+                        narrative_parts.append(obj["narrative"])
+                i += 1
+
+            narrative = " ".join(narrative_parts) if narrative_parts else ""
+            return DMResolution(
+                resolved_actions=resolved_actions,
+                narrative=narrative,
+                world_notes="",
+            )
+
+        # Handle standard object format
         resolved_actions = []
         for ra in data.get("resolved_actions", []):
-            normalized = {
-                "character_id": ra.get("character_id", ra.get("actor", "")),
-                "intent": ra.get("intent", ra.get("action", ra.get("description", ""))),
-                "success_level": ra.get("success_level", ra.get("outcome", "success")),
-                "effects": [],
-                "description": ra.get("description", ra.get("narrative", "")),
-            }
-
-            # Normalize effects: LLM may use {target, type, change} instead of {target_type, target_id, changes, description}
-            for eff in ra.get("effects", []):
-                norm_eff = {
-                    "target_type": eff.get("target_type", eff.get("type", "character")),
-                    "target_id": eff.get("target_id", eff.get("target", "")),
-                    "changes": eff.get("changes", {"narrative": eff.get("change", eff.get("description", ""))}),
-                    "description": eff.get("description", eff.get("change", eff.get("narrative", ""))),
-                }
-                normalized["effects"].append(norm_eff)
-
+            normalized = self._normalize_action(ra)
             resolved_actions.append(normalized)
 
         return DMResolution(
@@ -123,6 +133,28 @@ class DMAgent:
             narrative=data.get("narrative", ""),
             world_notes=data.get("world_notes", data.get("notes", "")),
         )
+
+    def _normalize_action(self, ra: dict) -> dict:
+        """Normalize an LLM action object to the internal schema."""
+        normalized = {
+            "character_id": ra.get("character_id", ra.get("actor", ra.get("characte_id", ""))),
+            "intent": ra.get("intent", ra.get("action", ra.get("description", ""))),
+            "success_level": ra.get("success_level", ra.get("outcome", "success")),
+            "effects": [],
+            "description": ra.get("description", ra.get("narrative", "")),
+        }
+
+        # Normalize effects
+        for eff in ra.get("effects", []):
+            norm_eff = {
+                "target_type": eff.get("target_type", eff.get("type", "character")),
+                "target_id": eff.get("target_id", eff.get("target", "")),
+                "changes": eff.get("changes", {"narrative": eff.get("change", eff.get("description", ""))}),
+                "description": eff.get("description", eff.get("change", eff.get("narrative", ""))),
+            }
+            normalized["effects"].append(norm_eff)
+
+        return normalized
 
     def resolution_to_effects(self, resolution: DMResolution) -> list[Effect]:
         """Convert a DMResolution into a list of Effect objects."""
@@ -185,25 +217,32 @@ class DMAgent:
 
         if use_baresexp:
             context_str, token_count = self.build_context_baresexp(pool, location, characters)
-            system_msg = (
-                f"You are a Dungeon Master resolving actions in a text-based RPG. "
-                f"The context below is in BareSexp format ({token_count} tokens). "
-                f"Read it carefully, resolve the action pool, and return ONLY valid JSON "
-                f"with resolved_actions, narrative, and world_notes."
-            )
-            user_msg = context_str
+            messages = [
+                {"role": "system", "content": (
+                    "You are a Dungeon Master for a text-based RPG. "
+                    "The user message is in BareSexp format — a compact nested list notation using parentheses. "
+                    "Each element is (key value) or (key sub-elements...). "
+                    "Read the (context ...) block for your role, constraints, and facts. "
+                    "Read the (task ...) block for what to do. "
+                    "Read the (;; Raw encoded state) section for location, pool, and character data. "
+                    "After reading, return ONLY a JSON object with these keys: "
+                    "resolved_actions (array of {character_id, intent, success_level, effects, description}), "
+                    "narrative (string — what happened at this location), "
+                    "world_notes (string — notes about spreading consequences or empty string). "
+                    "Every declared action in the pool must appear in resolved_actions."
+                )},
+                {"role": "user", "content": context_str},
+            ]
         else:
             context = self.build_context(pool, location, characters)
             prompt = self.format_prompt(context)
-            system_msg = "You are a Dungeon Master resolving actions in a text-based RPG."
-            user_msg = prompt
-
-        messages = [
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg},
-        ]
+            messages = [
+                {"role": "system", "content": "You are a Dungeon Master resolving actions in a text-based RPG."},
+                {"role": "user", "content": prompt},
+            ]
 
         if self.debug:
+            user_msg = context_str if use_baresexp else prompt
             print(f"\n{'='*60}")
             print(f"[DM] Resolving: {pool.location_id} round={pool.round} | Tokens: {token_count if use_baresexp else 'verbose'}")
             print(f"[DM] Actions: {'; '.join(a.intent[:60] for a in pool.actions)}")

@@ -290,7 +290,7 @@ def declare(
     engine = _get_engine()
     try:
         pool = engine.repo.load_action_pool(location, engine.current_round)
-        if pool is None or pool.status == "resolved":
+        if pool is None or pool.status in ("resolved", "locked"):
             pool = engine.create_pool(location)
 
         if pool.status == "open":
@@ -432,7 +432,7 @@ def play(
                     console.print("[red]Usage: declare <intent>[/red]")
                     continue
                 pool = engine.repo.load_action_pool(pc.location_id, engine.game_state.current_round)
-                if pool is None or pool.status == "resolved":
+                if pool is None or pool.status in ("resolved", "locked"):
                     pool = engine.create_pool(pc.location_id)
                 if pool.status == "open":
                     engine.add_action(pool, pc_id, intent)
