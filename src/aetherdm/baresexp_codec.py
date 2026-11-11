@@ -17,6 +17,26 @@ from aetherdm.models import (
 from aetherdm.simulation.reaction import calculate_reaction_score
 
 
+# ── Helpers ──
+
+
+def _compute_current_state(location: LocationNode) -> str:
+    """Build a human-readable 'current state' string for a location.
+
+    Combines the static base description with a live summary of active
+    environment conditions. This gives the LLM a single coherent picture
+    instead of making it reconcile potentially contradictory sources.
+
+    The base description is the origin/character of the place; the conditions
+    line reflects what is happening right now.
+    """
+    base = location.description or "(no description)"
+    conds = location.environment.conditions
+    if conds:
+        return f"{base} [Current state: {', '.join(conds)}]"
+    return f"{base} [Current state: calm, no notable conditions]"
+
+
 class DMPromptParts(NamedTuple):
     """Pre-compiled system prompt and user message for LLM calls."""
     system_msg: str  # context baresexp
@@ -294,6 +314,14 @@ def build_dm_document(
             "For character changes: stats and relationships values must be integers",
             "For location changes: environment objects must be {id: str, name: str, description: str, quantity: int}",
             "For location changes: environment resources must be {name: str, amount: int} pairs",
+            "CRITICAL: Every state change described in your narrative MUST have a corresponding effect with "
+            "target_type 'location' that updates environment.conditions and/or description. Do NOT describe "
+            "state changes (fire extinguished, damage repaired, conditions cleared) in narrative without "
+            "producing matching location effects.",
+            "The payload includes both 'location.description' (static, the origin character of the place) "
+            "and 'current_state' (dynamic, base description + live conditions). Trust current_state as the "
+            "authoritative current state. If description and conditions conflict, conditions are what is "
+            "happening now.",
         ]
 
     # Build JSON payload for the task content field.
@@ -302,6 +330,7 @@ def build_dm_document(
     # (currently `task` is semantically for instructions, so using it for data confuses the LLM).
     payload = json.dumps({
         "location": location.model_dump(),
+        "current_state": _compute_current_state(location),
         "pool": pool.model_dump(),
         "characters": [ch.model_dump() for ch in characters],
     })
@@ -400,6 +429,7 @@ def build_narrate_document(
             "description": location.description,
             "conditions": location.environment.conditions,
         },
+        "current_state": _compute_current_state(location),
         "round": pool.round,
     })
 
@@ -416,10 +446,19 @@ def build_narrate_document(
                 "Set the scene, convey sensory details and emotions, but stay faithful to the facts",
                 "Write in second person present tense where appropriate",
                 "Keep it to 2-4 paragraphs",
+                "METADATA KEYS TO IGNORE: The JSON payload contains structural/metadata keys that are "
+                "NOT narrative material. Specifically: 'round' is a game counter — never mention round "
+                "numbers or ordinal round names (First Round, Second Round, etc.) in your prose. 'id', "
+                "'target_type', 'target_id' are internal identifiers — never reference them. 'action_details' "
+                "is a list of mechanical summaries — use them for context, do not quote them verbatim.",
+                "GROUND YOUR SCENE IN current_state: The payload includes both 'location.description' (static, "
+                "the origin character of the place) and 'current_state' (dynamic, base description + live "
+                "conditions). Trust current_state as the authoritative current state. If the static description "
+                "says 'engulfed in flames' but current_state says 'calm, no notable conditions', the fire is out — "
+                "describe the aftermath, not the fire.",
             ],
             facts=[
                 f"Location: {location.name} — conditions=[{loc_conditions}]",
-                f"Round: {pool.round}",
             ],
         )
         .task(

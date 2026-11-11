@@ -4,7 +4,7 @@ import json
 import pytest
 from baresexp import BareSexpDocument
 
-from aetherdm.baresexp_codec import build_dm_document, build_dm_prompt, DMPromptParts, _count_tokens
+from aetherdm.baresexp_codec import build_dm_document, build_narrate_document, build_dm_prompt, DMPromptParts, _count_tokens, _compute_current_state
 from aetherdm.models import ActionPool, LocationNode, Character, Environment, ActionEntry
 
 
@@ -118,3 +118,110 @@ class TestBuildDMPromptLegacy:
         assert token_count > 0
         assert "(context" in combined
         assert "(task" in combined
+
+
+class TestComputeCurrentState:
+    def test_with_active_conditions(self):
+        loc = LocationNode(
+            id="marketplace",
+            name="Marketplace",
+            description="A bustling market area.",
+            environment=Environment(conditions=["on_fire", "smoky", "chaotic"]),
+        )
+        state = _compute_current_state(loc)
+        assert "A bustling market area." in state
+        assert "Current state:" in state
+        assert "on_fire" in state
+        assert "smoky" in state
+        assert "chaotic" in state
+
+    def test_without_conditions(self):
+        loc = LocationNode(
+            id="village_square",
+            name="Village Square",
+            description="A peaceful gathering place.",
+            environment=Environment(conditions=[]),
+        )
+        state = _compute_current_state(loc)
+        assert "A peaceful gathering place." in state
+        assert "calm, no notable conditions" in state
+
+    def test_empty_description(self):
+        loc = LocationNode(
+            id="secret_room",
+            name="Secret Room",
+            description="",
+            environment=Environment(conditions=["dark"]),
+        )
+        state = _compute_current_state(loc)
+        assert "(no description)" in state
+        assert "dark" in state
+
+
+class TestDMDocumentCurrentState:
+    def test_payload_includes_current_state(self, sample_pool, sample_location, sample_characters):
+        prompt = build_dm_document(sample_pool, sample_location, sample_characters)
+        import re
+        match = re.search(r'\(content "(.+?)"\)\s*\(steps', prompt.user_msg, re.DOTALL)
+        if not match:
+            match = re.search(r'\(content "(.+?)"\)\s*\)', prompt.user_msg, re.DOTALL)
+        assert match, "Could not find (content ...) in user_msg"
+        content_str = match.group(1).replace('\\"', '"')
+        data = json.loads(content_str)
+        assert "current_state" in data
+        assert "on_fire" in data["current_state"]
+        assert "smoky" in data["current_state"]
+
+    def test_resolution_constraints_mention_current_state(self, sample_pool, sample_location, sample_characters):
+        prompt = build_dm_document(sample_pool, sample_location, sample_characters)
+        # Minimal mode condenses constraint text, so check for fragments
+        sys_lower = prompt.system_msg.lower()
+        assert "stati" in sys_lower  # "current_state" → condensed to "stati"
+        assert "payload-includes-both-loca-descrip" in sys_lower  # part of the constraint about description vs current_state
+
+
+class TestNarrateDocumentConstraints:
+    def test_payload_includes_current_state(self, sample_pool, sample_location, sample_characters):
+        from aetherdm.models import DMResolution
+        resolution = DMResolution(
+            resolved_actions=[],
+            narrative="The fire was extinguished.",
+            world_notes="",
+        )
+        prompt = build_narrate_document(sample_location, sample_pool, resolution.narrative, [])
+        import re
+        match = re.search(r'\(content "(.+?)"\)\s*\(steps', prompt.user_msg, re.DOTALL)
+        if not match:
+            match = re.search(r'\(content "(.+?)"\)\s*\)', prompt.user_msg, re.DOTALL)
+        assert match, "Could not find (content ...) in user_msg"
+        content_str = match.group(1).replace('\\"', '"')
+        data = json.loads(content_str)
+        assert "current_state" in data
+
+    def test_constraints_warn_about_round_metadata(self, sample_pool, sample_location, sample_characters):
+        from aetherdm.models import DMResolution
+        resolution = DMResolution(resolved_actions=[], narrative="Test", world_notes="")
+        prompt = build_narrate_document(sample_location, sample_pool, resolution.narrative, [])
+        assert "round" in prompt.system_msg.lower()
+        assert "never mention round" in prompt.system_msg.lower() or "metadata" in prompt.system_msg.lower()
+
+    def test_constraints_warn_about_current_state(self, sample_pool, sample_location, sample_characters):
+        from aetherdm.models import DMResolution
+        resolution = DMResolution(resolved_actions=[], narrative="Test", world_notes="")
+        prompt = build_narrate_document(sample_location, sample_pool, resolution.narrative, [])
+        sys_lower = prompt.system_msg.lower()
+        assert "current-state" in sys_lower or "current_state" in sys_lower  # condensed form
+        assert "ground-scene" in sys_lower  # "GROUND YOUR SCENE IN current_state" condensed
+
+    def test_no_round_in_facts(self, sample_pool, sample_location, sample_characters):
+        """Round number should not appear in context facts (removed to prevent leakage)."""
+        from aetherdm.models import DMResolution
+        resolution = DMResolution(resolved_actions=[], narrative="Test", world_notes="")
+        prompt = build_narrate_document(sample_location, sample_pool, resolution.narrative, [])
+        # Check the facts section does NOT contain "Round:" as a standalone fact
+        import re
+        # The facts section is: (facts (fact ...))
+        facts_match = re.search(r'\(facts\s+(.+?)\s*\)', prompt.system_msg, re.DOTALL)
+        assert facts_match, "Could not find (facts ...) in system_msg"
+        facts_content = facts_match.group(1)
+        assert "round" not in facts_content.lower(), f"Round should not appear in facts, but found: {facts_content}"
