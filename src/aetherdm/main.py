@@ -490,12 +490,21 @@ def play(
                 if target_id not in engine._locations:
                     console.print(f"[red]Location not found:[/red] {target_id}")
                     continue
-                # Check if connected (or allow free movement for now)
+
+                # Check for baresexp history at the target location (transition narration)
+                transition_narrative = engine.narrate_transition(target_id)
+
                 pc.location_id = target_id
                 engine.repo.save_character(pc)
-                # Reload to update location's character list
                 engine._load_world_state()
+
                 console.print(f"[green]Moved to:[/green] {engine._locations[target_id].name}")
+
+                # Narrate what happened at the new location while PC was away
+                if transition_narrative:
+                    console.print(f"\n[bold yellow]— What you find here —[/bold yellow]")
+                    console.print(transition_narrative)
+                    console.print()
             elif action == "look":
                 console.print(f"[bold]{current_loc.name}[/bold]: {current_loc.description}")
                 if current_loc.environment.conditions:

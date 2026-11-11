@@ -1,11 +1,10 @@
 """DM Agent — LLM-powered pool resolution via LangGraph."""
 
 import json
-import sys
 from pathlib import Path
-from typing import Any
 
-from aetherdm.baresexp_codec import build_dm_prompt, encode_pool
+from aetherdm.baresexp_codec import build_dm_document, build_dm_prompt, encode_pool
+from aetherdm.config import settings
 from aetherdm.llm.provider import LLMProvider
 from aetherdm.models import ActionPool, Character, DMResolution, Effect, LocationNode
 from aetherdm.simulation.reaction import calculate_reaction_score
@@ -17,6 +16,10 @@ class DMAgent:
     Receives the action pool, location state, and character context,
     then uses the LLM to resolve actions with full contextual understanding.
     Falls back to rule-based resolution if the LLM is unavailable.
+
+    Dual-model architecture:
+    - Resolution: cheap/fast model (e.g., qwen-turbo) for structured output
+    - Narration: expensive/verbose model (e.g., qwen-plus) for prose
     """
 
     def __init__(self, llm: LLMProvider | None = None, debug: bool = False):
@@ -70,12 +73,14 @@ class DMAgent:
         characters: list[Character],
         mode: str = "minimal",
     ) -> tuple[str, int]:
-        """Delegate to the baresexp codec for the full DM prompt."""
+        """Delegate to the baresexp codec for the full DM prompt (legacy)."""
         return build_dm_prompt(pool, location, characters, mode=mode)
 
     def format_prompt(self, context: dict[str, str]) -> str:
         """Fill in the prompt template with context."""
         return self._prompt_template.format(**context)
+
+    # ── Parsing ──
 
     def parse_llm_response(self, text: str) -> DMResolution:
         """Parse the LLM's JSON response into a DMResolution object.
@@ -85,7 +90,6 @@ class DMAgent:
         2. Flat array of [seq_num, {action_obj}, seq_num, {action_obj}, ...]
         3. Alternative field names (action_id→intent, target/target_id, etc.)
         """
-        # Try to extract JSON from markdown code blocks
         cleaned = text.strip()
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
@@ -103,7 +107,6 @@ class DMAgent:
             narrative_parts = []
             i = 0
             while i < len(data):
-                # Skip numeric sequence keys
                 if isinstance(data[i], (int, float)):
                     i += 1
                     continue
@@ -134,6 +137,102 @@ class DMAgent:
             world_notes=data.get("world_notes", data.get("notes", "")),
         )
 
+    def _parse_baresexp_response(self, text: str) -> DMResolution:
+        """Parse a BareSexp-formatted response into DMResolution.
+
+        Expected format:
+        (resolution
+          (resolved-actions
+            (action char_id intent success_level effects description)
+            ...)
+          (narrative "text")
+          (world-notes "text")
+        )
+
+        Falls back to JSON parsing if baresexp parse fails.
+        """
+        from aetherdm.baresexp_codec import parse_baresexp
+
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            cleaned = "\n".join(lines)
+
+        try:
+            parsed = parse_baresexp(cleaned)
+        except Exception:
+            # Fall back to JSON parsing
+            return self.parse_llm_response(text)
+
+        # Extract resolution from parsed structure
+        resolved_actions = []
+        narrative = ""
+        world_notes = ""
+
+        def _extract_steps(obj, depth=0):
+            nonlocal narrative, world_notes
+            if not hasattr(obj, "steps"):
+                return
+            for step in obj.steps:
+                if step.name == "resolved-actions":
+                    for action_item in getattr(step, "items", []):
+                        resolved_actions.append(self._normalize_baresexp_action(action_item))
+                elif step.name == "narrative":
+                    narrative = getattr(step, "description", "") or getattr(step, "content", "")
+                elif step.name == "world-notes":
+                    world_notes = getattr(step, "description", "") or getattr(step, "content", "")
+
+        _extract_steps(parsed)
+
+        # If no resolved_actions found, try top-level
+        if not resolved_actions and hasattr(parsed, "name") and parsed.name == "resolution":
+            # Try to find resolved-actions as a direct child
+            for step in getattr(parsed, "steps", []):
+                if step.name == "resolved-actions":
+                    for item in getattr(step, "items", []):
+                        resolved_actions.append(self._normalize_baresexp_action(item))
+                elif step.name == "narrative":
+                    narrative = getattr(step, "description", "")
+                elif step.name == "world-notes":
+                    world_notes = getattr(step, "description", "")
+
+        return DMResolution(
+            resolved_actions=resolved_actions,
+            narrative=narrative,
+            world_notes=world_notes,
+        )
+
+    def _normalize_baresexp_action(self, action_item) -> dict:
+        """Normalize a baresexp action item to internal schema.
+
+        BareSexp actions are tuples or objects depending on how the LLM formats them.
+        """
+        # If it's a dict (LLM might still use dict-like structure in baresexp)
+        if isinstance(action_item, dict):
+            return self._normalize_action(action_item)
+
+        # If it's a tuple/list: (action char_id intent success_level effects description)
+        if isinstance(action_item, (list, tuple)) and len(action_item) >= 3:
+            # Skip the "action" keyword if present
+            items = list(action_item)
+            if items and items[0] == "action":
+                items = items[1:]
+
+            return {
+                "character_id": str(items[0]) if len(items) > 0 else "",
+                "intent": str(items[1]) if len(items) > 1 else "",
+                "success_level": str(items[2]) if len(items) > 2 else "success",
+                "effects": items[3] if len(items) > 3 and isinstance(items[3], list) else [],
+                "description": str(items[4]) if len(items) > 4 else "",
+            }
+
+        # Fallback: try to normalize as dict
+        return self._normalize_action({} if not isinstance(action_item, dict) else action_item)
+
     def _normalize_action(self, ra: dict) -> dict:
         """Normalize an LLM action object to the internal schema."""
         normalized = {
@@ -144,7 +243,6 @@ class DMAgent:
             "description": ra.get("description", ra.get("narrative", "")),
         }
 
-        # Normalize effects
         for eff in ra.get("effects", []):
             norm_eff = {
                 "target_type": eff.get("target_type", eff.get("type", "character")),
@@ -164,13 +262,15 @@ class DMAgent:
                 effects.append(Effect(**effect_data))
         return effects
 
+    # ── Async resolution (legacy) ──
+
     async def resolve_pool(
         self,
         pool: ActionPool,
         location: LocationNode,
         characters: list[Character],
     ) -> DMResolution:
-        """Resolve an action pool using the LLM.
+        """Resolve an action pool using the LLM (async).
 
         Falls back to rule-based resolution if LLM is unavailable.
         """
@@ -194,88 +294,85 @@ class DMAgent:
             )
             return self.parse_llm_response(response_text)
         except Exception:
-            # Fallback to rule-based if LLM call fails
             return self._fallback_resolve(pool, characters)
+
+    # ── Dual-model resolution + narration ──
 
     def resolve_pool_sync(
         self,
         pool: ActionPool,
         location: LocationNode,
         characters: list[Character],
-        use_baresexp: bool = True,
+        output_format: str = "json",
     ) -> DMResolution:
-        """Synchronous version of resolve_pool.
+        """Resolve an action pool using the LLM (sync, dual-model).
+
+        Uses the resolution model (cheap/fast) for structured output.
+        The narrative field in the returned DMResolution is minimal —
+        use narrate_sync() for verbose prose.
 
         Args:
-            use_baresexp: If True, uses compact baresexp for context (fewer tokens).
-                          If False, uses the full verbose text context.
+            output_format: "json" (default) or "baresexp" — controls output format instruction.
         """
         if self.llm is None:
             if self.debug:
                 print("\n[DM DEBUG] LLM not configured — using fallback\n")
             return self._fallback_resolve(pool, characters)
 
-        if use_baresexp:
-            context_str, token_count = self.build_context_baresexp(pool, location, characters)
-            messages = [
-                {"role": "system", "content": (
-                    "You are a Dungeon Master for a text-based RPG. "
-                    "The user message is in BareSexp format — a compact nested list notation using parentheses. "
-                    "Each element is (key value) or (key sub-elements...). "
-                    "Read the (context ...) block for your role, constraints, and facts. "
-                    "Read the (task ...) block for what to do. "
-                    "Read the (;; Raw encoded state) section for location, pool, and character data. "
-                    "After reading, return ONLY a JSON object with these keys: "
-                    "resolved_actions (array of {character_id, intent, success_level, effects, description}), "
-                    "narrative (string — what happened at this location), "
-                    "world_notes (string — notes about spreading consequences or empty string). "
-                    "Every declared action in the pool must appear in resolved_actions."
-                )},
-                {"role": "user", "content": context_str},
-            ]
-        else:
-            context = self.build_context(pool, location, characters)
-            prompt = self.format_prompt(context)
-            messages = [
-                {"role": "system", "content": "You are a Dungeon Master resolving actions in a text-based RPG."},
-                {"role": "user", "content": prompt},
-            ]
+        # Build BareSexpDocument with compile_parts()
+        prompt = build_dm_document(
+            pool, location, characters, output_format=output_format
+        )
+
+        system_msg = prompt.system_msg
+        user_msg = prompt.user_msg
+        token_count = prompt.token_count
+
+        messages = [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ]
 
         if self.debug:
-            user_msg = context_str if use_baresexp else prompt
             print(f"\n{'='*60}")
-            print(f"[DM] Resolving: {pool.location_id} round={pool.round} | Tokens: {token_count if use_baresexp else 'verbose'}")
+            print(f"[DM] Resolving: {pool.location_id} round={pool.round} | Tokens: {token_count}")
             print(f"[DM] Actions: {'; '.join(a.intent[:60] for a in pool.actions)}")
-            # Show the structured context+task header (first ~400 chars)
-            header_end = user_msg.find("\n\n;; Raw encoded state")
-            if header_end > 0:
-                print(f"[DM] Context+Task prompt:")
-                print(user_msg[:header_end])
-                print(f"[DM] Raw encoded state ({len(user_msg) - header_end} chars):")
-                print(user_msg[header_end:header_end+500])
-                if len(user_msg) > header_end + 500:
-                    print(f"  ... ({len(user_msg) - header_end - 500} more chars of raw state)")
-            else:
-                print(f"[DM] Prompt ({len(user_msg)} chars):")
-                print(user_msg[:800])
-            print(f"[DM] FULL prompt sent to LLM: {len(user_msg)} chars, {token_count} tokens")
+            print(f"[DM] Output format: {output_format}")
+            print(f"[DM] System prompt ({len(system_msg)} chars):")
+            print(system_msg[:600])
+            if len(system_msg) > 600:
+                print(f"  ... ({len(system_msg) - 600} more chars)")
+            print(f"[DM] User message ({len(user_msg)} chars):")
+            print(user_msg[:600])
+            if len(user_msg) > 600:
+                print(f"  ... ({len(user_msg) - 600} more chars)")
             print(f"{'='*60}")
+
+        # Use resolution model (cheap/fast)
+        resolution_model = settings.resolution_model
 
         try:
             if self.debug:
-                print("[DM] Calling LLM... ", end="", flush=True)
+                print(f"[DM] Calling LLM (model={resolution_model})... ", end="", flush=True)
             response_text = self.llm.chat_sync(
                 messages,
                 temperature=0.7,
                 max_tokens=2048,
-                response_format={"type": "json_object"},
+                response_format={"type": "json_object"} if output_format == "json" else None,
+                model=resolution_model,
             )
             if self.debug:
                 print(f"done ({len(response_text)} chars)")
                 print(f"[DM] Raw response:\n{response_text[:800]}")
                 if len(response_text) > 800:
                     print(f"... ({len(response_text) - 800} more chars)")
-            resolution = self.parse_llm_response(response_text)
+
+            # Parse based on output format
+            if output_format == "baresexp":
+                resolution = self._parse_baresexp_response(response_text)
+            else:
+                resolution = self.parse_llm_response(response_text)
+
             if self.debug:
                 print(f"[DM] Parsed: {len(resolution.resolved_actions)} actions")
                 for ra in resolution.resolved_actions:
@@ -290,26 +387,96 @@ class DMAgent:
                 print(f"[DM] LLM failed ({type(e).__name__}: {e}) — fallback")
             return self._fallback_resolve(pool, characters)
 
+    def narrate_sync(
+        self,
+        pool: ActionPool,
+        location: LocationNode,
+        resolution: DMResolution,
+    ) -> str:
+        """Generate verbose narrative prose for a resolution.
+
+        Uses the narrative model (expensive/verbose) for rich prose.
+        Called only for PC locations or transition narration.
+
+        Returns:
+            Narrative string.
+        """
+        if self.llm is None:
+            return self._fallback_narrative(pool, resolution)
+
+        # Build narrative prompt
+        action_summary = "; ".join(
+            f"{ra.character_id} ({ra.success_level}): {ra.description}"
+            for ra in resolution.resolved_actions
+        )
+        effect_summary = "; ".join(
+            f"{eff['target_type']}:{eff['target_id']} — {eff.get('description', '')}"
+            for ra in resolution.resolved_actions
+            for eff in ra.effects
+        )
+
+        system_msg = (
+            "You are a Dungeon Master writing vivid narrative prose for a text-based RPG. "
+            "Describe what happened at this location based on the action outcomes and effects. "
+            "Be descriptive and immersive — set the scene, convey emotions, show consequences. "
+            "Write in second person present tense. Keep it to 2-4 sentences."
+        )
+
+        loc_conditions = ", ".join(location.environment.conditions) if location.environment.conditions else "calm"
+
+        user_msg = (
+            f"Location: {location.name} — {location.description}\n"
+            f"Conditions: {loc_conditions}\n"
+            f"Round: {pool.round}\n"
+            f"Actions resolved:\n{action_summary}\n"
+            f"Effects applied:\n{effect_summary}\n"
+            f"\nWrite a vivid narrative of what happened here."
+        )
+
+        messages = [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ]
+
+        narrative_model = settings.narrative_model
+
+        try:
+            if self.debug:
+                print(f"[DM NARRATE] Calling LLM (model={narrative_model})... ", end="", flush=True)
+            response = self.llm.chat_sync(
+                messages,
+                temperature=0.8,
+                max_tokens=512,
+                model=narrative_model,
+            )
+            if self.debug:
+                print(f"done ({len(response)} chars)")
+            return response.strip()
+        except Exception as e:
+            if self.debug:
+                print(f"[DM NARRATE] Failed ({type(e).__name__}: {e}) — fallback")
+            return self._fallback_narrative(pool, resolution)
+
+    def _fallback_narrative(self, pool: ActionPool, resolution: DMResolution) -> str:
+        """Generate a basic narrative when LLM is unavailable."""
+        parts = []
+        for ra in resolution.resolved_actions:
+            parts.append(ra.description)
+        return " ".join(parts) if parts else f"Nothing notable happened at {pool.location_id}."
+
+    # ── Rule-based fallback ──
+
     def _fallback_resolve(
         self, pool: ActionPool, characters: list[Character]
     ) -> DMResolution:
-        """Rule-based fallback: resolve actions with basic contextual logic.
-
-        Produces:
-        - Character-level effects (mark actions as taken)
-        - Location-level effects based on action intent keywords
-        - A readable narrative describing what happened
-        """
+        """Rule-based fallback: resolve actions with basic contextual logic."""
         from aetherdm.simulation.eligibility import filter_eligible
 
         eligible = filter_eligible(characters)
         eligible_ids = {ch.id for ch in eligible}
-
-        # Build character lookup for intent-based effects
         char_map = {ch.id: ch for ch in characters}
 
         resolved = []
-        location_effects: list[dict] = []
         narrative_parts: list[str] = []
 
         for action in pool.actions:
@@ -322,10 +489,8 @@ class DMAgent:
             ch = char_map.get(action.character_id)
             intent = action.intent.lower()
 
-            # Basic intent recognition for location effects
             effects_list: list[dict] = []
 
-            # Fire-fighting intent reduces fire intensity
             if any(w in intent for w in ("fire", "bucket", "extinguish", "water", "flame", "burn")):
                 effects_list.append({
                     "target_type": "location",
@@ -334,7 +499,6 @@ class DMAgent:
                     "description": f"{action.character_id} fights the fire: {action.intent}",
                 })
 
-            # Healing intent
             if any(w in intent for w in ("heal", "bandage", "treat", "medicine")):
                 effects_list.append({
                     "target_type": "character",
@@ -343,7 +507,6 @@ class DMAgent:
                     "description": f"{action.character_id} tends to wounds: {action.intent}",
                 })
 
-            # Movement intent
             if any(w in intent for w in ("move", "go", "walk", "run", "flee", "head to")):
                 effects_list.append({
                     "target_type": "character",
@@ -352,7 +515,6 @@ class DMAgent:
                     "description": f"{action.character_id} moves: {action.intent}",
                 })
 
-            # Always mark character as having acted
             effects_list.append({
                 "target_type": "character",
                 "target_id": action.character_id,

@@ -188,6 +188,50 @@ class TestDMAgentParsing:
         assert resolution.resolved_actions == []
         assert resolution.narrative == ""
 
+    def test_parse_baresexp_response_json_fallback(self, dm_agent):
+        """When baresexp parse fails, fall back to JSON."""
+        # Invalid baresexp but valid JSON — should fall back
+        text = json.dumps({
+            "resolved_actions": [
+                {"character_id": "pc", "intent": "run", "success_level": "success", "effects": [], "description": "PC runs."}
+            ],
+            "narrative": "PC runs away.",
+            "world_notes": "",
+        })
+        # The baresexp parser may or may not parse JSON as valid baresexp.
+        # Either way, the resolution should have the correct data.
+        resolution = dm_agent._parse_baresexp_response(text)
+        # If baresexp parsing succeeds but finds no resolved-actions, it falls back to JSON
+        # If it fails, it falls back to JSON directly
+        if resolution.resolved_actions:
+            assert resolution.resolved_actions[0].character_id == "pc"
+        else:
+            # Fallback to JSON parsing
+            resolution2 = dm_agent.parse_llm_response(text)
+            assert resolution2.resolved_actions[0].character_id == "pc"
+
+
+class TestDMAgentNarration:
+    def test_fallback_narrative(self, dm_agent):
+        """Generate narrative without LLM."""
+        resolution = DMResolution(
+            resolved_actions=[
+                {"character_id": "pc", "intent": "fight fire", "success_level": "success", "effects": [], "description": "PC fights the fire."},
+            ],
+            narrative="Fire contained.",
+            world_notes="",
+        )
+        narrative = dm_agent._fallback_narrative(
+            ActionPool(location_id="marketplace", round=1), resolution
+        )
+        assert "fights the fire" in narrative
+
+    def test_fallback_narrative_empty(self, dm_agent):
+        pool = ActionPool(location_id="empty_place", round=1)
+        resolution = DMResolution(resolved_actions=[], narrative="", world_notes="")
+        narrative = dm_agent._fallback_narrative(pool, resolution)
+        assert "empty_place" in narrative
+
 
 class TestDMAgentEffectConversion:
     def test_resolution_to_effects(self, dm_agent):

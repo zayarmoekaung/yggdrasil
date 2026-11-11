@@ -17,6 +17,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "rich>=13.0",
     "typer>=0.9.0",
+    "baresexp>=1.3.0",
 ]
 
 [project.optional-dependencies]

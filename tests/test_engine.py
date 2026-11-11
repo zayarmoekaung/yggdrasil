@@ -140,3 +140,103 @@ class TestSimulationEngine:
         narrative = engine.get_narrative(pool, effects)
         assert "Round 1" in narrative
         assert "Hero acted" in narrative
+
+
+class TestEngineBackgroundBaresexp:
+    """Test that background locations store baresexp, not narrative text."""
+
+    def test_background_stores_baresexp(self, engine: SimulationEngine):
+        engine.next_round()
+        pool = engine.create_pool("town")
+        engine.add_action(pool, "hero", "Help the villagers")
+        engine.lock_pool("town")
+
+        # Resolve as background (pc_location_id different from pool location)
+        effects = engine.resolve_pool(pool, pc_location_id="other_location")
+
+        assert pool.status == "resolved"
+        # Background should have baresexp stored
+        assert "town" in engine._location_baresexp
+        baresexp_str = engine._location_baresexp["town"]
+        assert "(task" in baresexp_str or "(pool" in baresexp_str
+
+    def test_pc_location_clears_baresexp(self, engine: SimulationEngine):
+        engine.next_round()
+        pool = engine.create_pool("town")
+        engine.add_action(pool, "hero", "Help the villagers")
+        engine.lock_pool("town")
+
+        # First resolve as background
+        engine.resolve_pool(pool, pc_location_id="other_location")
+        assert "town" in engine._location_baresexp
+
+        # Now resolve as PC location — baresexp should be cleared
+        pool2 = engine.create_pool("town")
+        engine.add_action(pool2, "hero", "Look around")
+        engine.lock_pool("town")
+        engine.resolve_pool(pool2, pc_location_id="town")
+
+        assert "town" not in engine._location_baresexp
+
+    def test_get_background_summary_returns_baresexp(self, engine: SimulationEngine):
+        engine.next_round()
+        pool = engine.create_pool("town")
+        engine.add_action(pool, "hero", "Help")
+        engine.lock_pool("town")
+        engine.resolve_pool(pool, pc_location_id="other_location")
+
+        summary = engine.get_background_summary()
+        assert "town" in summary
+        assert "(no background activity)" not in summary
+
+    def test_empty_background_summary(self, engine: SimulationEngine):
+        summary = engine.get_background_summary()
+        assert summary == "(no background activity)"
+
+
+class TestEngineTransitionNarration:
+    """Test narration when PC arrives at a location with baresexp history."""
+
+    def test_narrate_transition_with_baresexp(self, engine: SimulationEngine):
+        engine.next_round()
+        pool = engine.create_pool("town")
+        engine.add_action(pool, "hero", "Help the villagers")
+        engine.lock_pool("town")
+
+        # Resolve as background first
+        engine.resolve_pool(pool, pc_location_id="other_location")
+        assert "town" in engine._location_baresexp
+
+        # Narrate transition
+        narrative = engine.narrate_transition("town")
+        assert narrative is not None
+        assert isinstance(narrative, str)
+
+        # Baresexp should be consumed
+        assert "town" not in engine._location_baresexp
+
+    def test_narrate_transition_no_baresexp(self, engine: SimulationEngine):
+        narrative = engine.narrate_transition("town")
+        assert narrative is None
+
+    def test_transition_narrative_consumed(self, engine: SimulationEngine):
+        engine.next_round()
+        pool = engine.create_pool("town")
+        engine.add_action(pool, "hero", "Help")
+        engine.lock_pool("town")
+        engine.resolve_pool(pool, pc_location_id="other_location")
+
+        # First call consumes
+        narrative1 = engine.narrate_transition("town")
+        assert narrative1 is not None
+
+        # Second call returns None (consumed)
+        narrative2 = engine.narrate_transition("town")
+        assert narrative2 is None
+
+    def test_get_transition_narrative(self, engine: SimulationEngine):
+        engine._transition_narratives["town"] = "Something happened here."
+        narrative = engine.get_transition_narrative("town")
+        assert narrative == "Something happened here."
+        # Should be consumed
+        assert engine.get_transition_narrative("town") is None

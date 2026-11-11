@@ -1,8 +1,8 @@
 """BareSexp serialization codec — converts Pydantic models to/from compact s-expressions."""
 
-from typing import Any
+from typing import Any, NamedTuple
 
-from baresexp import BareSexpBuilder, BareSexpResult, builder, compile_baresexp, parse_baresexp
+from baresexp import BareSexpBuilder, BareSexpDocument, BareSexpResult, builder, compile_baresexp, parse_baresexp
 
 from aetherdm.models import (
     ActionPool,
@@ -14,6 +14,14 @@ from aetherdm.models import (
     LocationNode,
 )
 from aetherdm.simulation.reaction import calculate_reaction_score
+
+
+class DMPromptParts(NamedTuple):
+    """Pre-compiled system prompt and user message for LLM calls."""
+    system_msg: str  # context baresexp
+    user_msg: str    # task baresexp + raw encoded state
+    document: BareSexpDocument
+    token_count: int
 
 
 # ── Encoders ──
@@ -203,24 +211,39 @@ def total_token_count(results: list[BareSexpResult]) -> int:
     return sum(r.token_count for r in results)
 
 
-# ── DM Prompt Builder ──
+def _count_tokens(text: str) -> int:
+    """Rough token count: split on whitespace and punctuation boundaries.
+
+    This is a fast approximation — actual LLM tokenizers differ, but
+    for relative comparisons (minimal vs full) it's consistent.
+    """
+    import re
+    return len(re.findall(r'\b\w+\b|[^\s\w]', text))
 
 
-def build_dm_prompt(
+# ── DM Document Builder (BareSexpDocument) ──
+
+
+def build_dm_document(
     pool: ActionPool,
     location: LocationNode,
     characters: list[Character],
+    output_format: str = "json",
     mode: str = "minimal",
-) -> tuple[str, int]:
-    """Build a full BareSexp DM prompt with context + task chained together.
+) -> DMPromptParts:
+    """Build a BareSexpDocument with context (system prompt) and task (user message).
 
-    Uses builder.context() for the DM role/persona/constraints/facts,
-    then builder.task() with steps for the resolution pipeline,
-    followed by raw encoded state data.
+    Uses BareSexpDocument.compile_parts() to get .context and .task separately.
+    The task's content field holds raw encoded state (location + pool + characters).
 
-    Returns (baresexp_string, token_count).
+    Args:
+        output_format: "json" (default) or "baresexp" — controls output instructions.
+        mode: "minimal" (default) or "full" — controls baresexp compactness.
+
+    Returns:
+        (BareSexpDocument, total_token_count)
     """
-    # Build character summaries
+    # Build character summaries for context
     char_parts = []
     for ch in characters:
         score = calculate_reaction_score(ch)
@@ -238,7 +261,7 @@ def build_dm_prompt(
             parts.append(f"secrets={','.join(ch.secrets)}")
         char_parts.append(" ".join(parts))
 
-    # Build action list
+    # Build action list for context
     action_parts = []
     for a in pool.actions:
         part = f"{a.character_id}: {a.intent}"
@@ -248,54 +271,98 @@ def build_dm_prompt(
 
     # Location context
     loc_conditions = ",".join(location.environment.conditions) if location.environment.conditions else "clean"
-    loc_flags = ",".join(f"{k}={v}" for k, v in location.environment.flags.items()) if location.environment.flags else ""
 
-    # Chain context + task using the builder
-    context_result = (
-        builder
+    # Build output format constraints
+    if output_format == "baresexp":
+        output_constraints = [
+            "Return ONLY valid BareSexp — no markdown, no code blocks, no explanation outside BareSexp",
+            "Use (resolution ...) with steps: resolved-actions, narrative, world-notes",
+            "Each resolved-action: (action character_id intent success_level effects description)",
+            "Each effect: (effect target_type target_id changes description)",
+            "Success levels: critical|success|partial|failure|critical_failure",
+        ]
+    else:
+        output_constraints = [
+            "Return ONLY valid JSON — no markdown, no code blocks, no explanation outside JSON",
+            "JSON must have keys: resolved_actions (array), narrative (string), world_notes (string)",
+            "Each resolved_action needs: character_id, intent, success_level, effects (array), description",
+            "Each effect needs: target_type (location|character|world|edge), target_id, changes (dict), description",
+            "Success levels: critical|success|partial|failure|critical_failure",
+        ]
+
+    # Build raw encoded state for task content
+    data_parts = [
+        encode_location(location, mode=mode).baresexp,
+        encode_pool(pool, mode=mode).baresexp,
+    ]
+    for ch in characters:
+        data_parts.append(encode_character(ch, mode=mode).baresexp)
+    raw_state = "\n".join(data_parts)
+
+    # Build steps for the task (embedded in description since steps need Step objects)
+    step_descriptions = [
+        "1. gather-context: Read the encoded state below",
+        "2. interpret-intentions: Analyze contradictions, synergies, independence",
+        "3. apply-judgment: Consider personality, goals, quickness, conditions",
+        "4. emit-effects: Produce Effects as target_type+target_id+changes for each action",
+        "5. narrate: Write concise narrative of what actually happened",
+    ]
+    pipeline_text = "\n".join(step_descriptions)
+
+    # Build the document — use minimal for context, but append raw state manually
+    # because minimal mode's grammar reduction shortens the content field too aggressively.
+    doc = (
+        BareSexpDocument()
         .minimal()
         .context(
             name="dungeon-master",
             role="You are a Dungeon Master resolving character actions in a text-based RPG. "
-                 "Interpret combined intentions, detect contradictions, and produce outcomes "
-                 "as structured JSON with resolved_actions, narrative, and world_notes.",
+                 "Interpret combined intentions, detect contradictions, and produce outcomes.",
             domain="fantasy-roleplay-simulation",
+            constraints=output_constraints + [
+                "Contradictory actions can partially succeed or both fail — use your judgment",
+                f"Location: {location.name} — conditions=[{loc_conditions}]",
+                f"Round: {pool.round}",
+                f"Actions to resolve: {'; '.join(action_parts) if action_parts else 'none'}",
+            ],
+            facts=[f"Character: {cp}" for cp in char_parts] if char_parts else ["No characters at location"],
         )
-        .constraint("Return ONLY valid JSON — no markdown, no code blocks, no explanation outside JSON")
-        .constraint("JSON must have keys: resolved_actions (array), narrative (string), world_notes (string)")
-        .constraint("Each resolved_action needs: character_id, intent, success_level (critical|success|partial|failure|critical_failure), effects (array), description")
-        .constraint("Each effect needs: target_type (location|character|world|edge), target_id, changes (dict), description")
-        .constraint("Success levels should reflect action difficulty and character capability")
-        .constraint("Contradictory actions can partially succeed or both fail — use your judgment")
-        .fact(f"Location: {location.name} — conditions=[{loc_conditions}]")
-        .fact(f"Location description: {location.description[:150]}")
-        .fact(f"Round: {pool.round}")
-        .fact(f"Actions to resolve: {'; '.join(action_parts) if action_parts else 'none'}")
         .task(
             name="resolve-pool",
-            description=f"Resolve {len(pool.actions)} action(s) at {location.id}",
+            description=f"Resolve {len(pool.actions)} action(s) at {location.id}. Pipeline: {pipeline_text}",
         )
-        .step("gather-context", description=f"State: {loc_conditions}{' | '+loc_flags if loc_flags else ''}")
-        .step("interpret-intentions", description="Analyze contradictions, synergies, independence")
-        .step("apply-judgment", description="Consider personality, goals, quickness, conditions")
-        .step("emit-effects", description="Produce Effects as target_type+target_id+changes for each action")
-        .step("narrate", description="Write concise narrative of what actually happened")
-        .compile(mode=mode)
     )
 
-    # Attach raw encoded objects as additional context
-    data_results: list[BareSexpResult] = [
-        encode_location(location, mode=mode),
-        encode_pool(pool, mode=mode),
-    ]
-    for ch in characters:
-        data_results.append(encode_character(ch, mode=mode))
+    # Calculate token count from compiled parts
+    parts = doc.compile_parts()
+    # Append raw encoded state to the task (un-shortened, needed by LLM)
+    full_task = parts.task + "\n\n;; Raw encoded state\n" + raw_state
+    total_tokens = _count_tokens(parts.context) + _count_tokens(full_task)
 
-    data_baresexp = "\n".join(r.baresexp for r in data_results)
-    data_tokens = total_token_count(data_results)
+    return DMPromptParts(
+        system_msg=parts.context,
+        user_msg=full_task,
+        document=doc,
+        token_count=total_tokens,
+    )
 
-    # Combine: system prompt (context+task) + raw data
-    combined = context_result.baresexp + "\n\n;; Raw encoded state\n" + data_baresexp
-    total_tokens = context_result.token_count + data_tokens
 
-    return combined, total_tokens
+# ── Legacy: kept for backward compatibility ──
+
+
+def build_dm_prompt(
+    pool: ActionPool,
+    location: LocationNode,
+    characters: list[Character],
+    mode: str = "minimal",
+) -> tuple[str, int]:
+    """Build a full BareSexp DM prompt with context + task chained together.
+
+    Deprecated: use build_dm_document() instead, which uses BareSexpDocument
+    with compile_parts() for clean system/user prompt separation.
+
+    Returns (baresexp_string, token_count).
+    """
+    prompt = build_dm_document(pool, location, characters, mode=mode)
+    parts = prompt.document.compile_parts()
+    return parts.full, prompt.token_count

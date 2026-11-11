@@ -47,10 +47,11 @@ class LLMProvider:
         temperature: float = 0.7,
         max_tokens: int = 2048,
         response_format: dict[str, Any] | None = None,
+        model: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
-            "model": self.model,
+            "model": model or self.model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -66,12 +67,17 @@ class LLMProvider:
         temperature: float = 0.7,
         max_tokens: int = 2048,
         response_format: dict[str, Any] | None = None,
+        model: str | None = None,
         **kwargs: Any,
     ) -> str:
-        """Send a chat completion request and return the assistant's reply."""
+        """Send a chat completion request and return the assistant's reply.
+
+        Args:
+            model: Optional model name override. If None, uses the default for this mode.
+        """
         import asyncio
 
-        params = self._build_params(messages, temperature, max_tokens, response_format, **kwargs)
+        params = self._build_params(messages, temperature, max_tokens, response_format, model=model, **kwargs)
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(
             None, lambda: self._client.chat.completions.create(**params)
@@ -84,9 +90,14 @@ class LLMProvider:
         temperature: float = 0.7,
         max_tokens: int = 2048,
         response_format: dict[str, Any] | None = None,
+        model: str | None = None,
         **kwargs: Any,
     ) -> str:
-        """Synchronous chat completion."""
-        params = self._build_params(messages, temperature, max_tokens, response_format, **kwargs)
+        """Synchronous chat completion.
+
+        Args:
+            model: Optional model name override. If None, uses the default for this mode.
+        """
+        params = self._build_params(messages, temperature, max_tokens, response_format, model=model, **kwargs)
         response = self._client.chat.completions.create(**params)
         return response.choices[0].message.content or ""
